@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use lab_adapters::compiler::{self, CompileOutput};
 use lab_adapters::gdb::GdbSession;
-use lab_core::IsaDefinition;
+use lab_core::{IsaDefinition, LabError};
 use serde::Serialize;
 
 use crate::{hx, Explanation, FlagDiffItem, MemChangeItem, PcJump, RegDiffItem, StepReport};
@@ -18,6 +18,10 @@ use crate::{hx, Explanation, FlagDiffItem, MemChangeItem, PcJump, RegDiffItem, S
 pub struct DebugSession {
     pub id: u64,
     pub isa: IsaDefinition,
+    /// 模式 B 目标架构(x86-64 本地 / arm64 远程真机)
+    pub arch: String,
+    /// ARM64 远程:user@host(Drop 时清理远端 gdbserver)
+    pub remote_host: Option<String>,
     pub source: Mutex<String>,
     pub compile: CompileOutput,
     gdb: Mutex<GdbSession>,
@@ -63,6 +67,10 @@ impl DebugSession {
     }
 
     pub fn create_with_compiler(id: u64, isa: IsaDefinition, source: &str, opt: &str, compiler: &str) -> Result<Self, String> {
+        let arch = isa.id.clone();
+        if arch == "arm64" {
+            return Self::create_arm64_remote(id, isa, source, opt, compiler);
+        }
         let out = compiler::compile(&compiler::CompileRequest {
             source: source.to_string(),
             opt: opt.to_string(),
@@ -74,7 +82,9 @@ impl DebugSession {
         let _ = gdb.insert_symbol_breakpoint("main");
         Ok(Self {
             id,
+            arch: isa.id.clone(),
             isa,
+            remote_host: None,
             source: Mutex::new(source.to_string()),
             compile: out,
             gdb: Mutex::new(gdb),
@@ -87,8 +97,106 @@ impl DebugSession {
         })
     }
 
+    /// PC 寄存器名(arm64=PC,x86=RIP)
+    fn pc_name(&self) -> &'static str {
+        if self.arch == "arm64" { "PC" } else { "RIP" }
+    }
+
     fn snapshot(&self, g: &mut GdbSession) -> Vec<(String, String)> {
+        // ARM64 远程:用 aarch64 寄存器名快照(X0-X30/SP/PC/NZCV)
+        if self.arch == "arm64" {
+            return g.snapshot_arm64().unwrap_or_default();
+        }
         g.snapshot().unwrap_or_default()
+    }
+
+    /// ARM64 远程真机调试(P8):交叉编译 → scp → 远端 gdbserver → gdb-multiarch 连接。
+    /// 主机/用户经环境变量 ASSEMBLYLAB_ARM64_HOST / ASSEMBLYLAB_ARM64_USER 配置。
+    fn create_arm64_remote(id: u64, isa: IsaDefinition, source: &str, opt: &str, compiler: &str) -> Result<Self, String> {
+        use std::process::Command;
+        let host = std::env::var("ASSEMBLYLAB_ARM64_HOST").unwrap_or_else(|_| "10.20.15.47".into());
+        let user = std::env::var("ASSEMBLYLAB_ARM64_USER").unwrap_or_else(|_| "firefly".into());
+        let remote_dir = format!("/tmp/assemblylab-arm-{id}");
+
+        let out = compiler::compile(&compiler::CompileRequest {
+            source: source.to_string(),
+            opt: opt.to_string(),
+            compiler: compiler.to_string(),
+        })
+        .map_err(|e| e.to_string())?;
+
+        // 二进制必须存在(compile 产物)
+        let win_bin = out.work_dir.join("main");
+        if !win_bin.exists() {
+            return Err("编译产物缺失(aarch64 ELF)".into());
+        }
+
+        // scp:Windows 侧推送到远端(免密 ssh);路径用正斜杠(反斜杠会被 scp 转义)
+        // 先清理远端残留的 gdbserver(其二进制可能被占用 → ETXTBSY)
+        let _ = Command::new("ssh")
+            .args(["-o", "BatchMode=yes", &format!("{user}@{host}"), "pkill -f gdbserver"])
+            .output();
+        let win_bin_fwd = win_bin.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let scp = Command::new("scp")
+            .args(["-o", "BatchMode=yes"])
+            .arg(&win_bin_fwd)
+            .arg(format!("{user}@{host}:{remote_dir}/main"))
+            .output()
+            .map_err(|e| format!("scp 失败: {e}"))?;
+        if !scp.status.success() {
+            // 远端目录可能不存在,先建目录重试
+            let _ = Command::new("ssh")
+                .args(["-o", "BatchMode=yes", &format!("{user}@{host}"), &format!("mkdir -p {remote_dir}")])
+                .status();
+            let retry = Command::new("scp")
+                .args(["-o", "BatchMode=yes"])
+                .arg(&win_bin_fwd)
+                .arg(format!("{user}@{host}:{remote_dir}/main"))
+                .output()
+                .map_err(|e| format!("scp 失败: {e}"))?;
+            if !retry.status.success() {
+                return Err(format!(
+                    "scp 推送失败: {}",
+                    String::from_utf8_lossy(&retry.stderr)
+                ));
+            }
+        }
+
+        // 远端启动 gdbserver(后台;gdbserver 进程随调试会话存活)
+        // 固定端口:scp 前的 pkill 已清掉残留 gdbserver;非常见端口可能被远端防火墙拦截
+        let gdbserver_port: u16 = 2345;
+        let remote_target = format!("{host}:{gdbserver_port}");
+        // ssh 命令末尾的 exit 确保会话立即关闭,后台 gdbserver 得以存活(nohup+& 不够)
+        let ssh_setup = Command::new("ssh")
+            .args(["-o", "BatchMode=yes", &format!("{user}@{host}"),
+                   &format!("chmod +x {remote_dir}/main; nohup gdbserver :{gdbserver_port} {remote_dir}/main >/dev/null 2>&1 & exit")])
+            .output()
+            .map_err(|e| format!("ssh 启动 gdbserver 失败: {e}"))?;
+        if !ssh_setup.status.success() {
+            return Err("远端 gdbserver 启动失败".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(800));
+
+        // gdb-multiarch 连接远端
+        let mut gdb = GdbSession::spawn_multiarch_remote(&out.wsl_dir, &remote_target).map_err(|e| e.to_string())?;
+
+        let _ = gdb.insert_symbol_breakpoint("main");
+
+        Ok(Self {
+            id,
+            isa,
+            arch: "arm64".into(),
+            source: Mutex::new(source.to_string()),
+            compile: out,
+            gdb: Mutex::new(gdb),
+            breakpoints: Mutex::new(HashMap::new()),
+            watchpoints: Mutex::new(Vec::new()),
+            step_counter: AtomicU64::new(0),
+            last_stop: Mutex::new(None),
+            started: std::sync::atomic::AtomicBool::new(true), // target-select 后停在入口
+            last_rip: Mutex::new(None),
+            remote_host: Some(format!("{user}@{host}")),
+        })
     }
 
     /// 单步(into = 步入;false = 步过指令)。count 次循环,首步带前后 diff。
@@ -112,7 +220,7 @@ impl DebugSession {
                 // 持锁期内读取机器码(build_report 不再入锁,防死锁)
                 let machine = after
                     .iter()
-                    .find(|(n, _)| n == "RIP")
+                    .find(|(n, _)| n == self.pc_name())
                     .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
                     .and_then(|rip| g.read_memory(rip, 15).ok())
                     .unwrap_or_default();
@@ -139,7 +247,7 @@ impl DebugSession {
         let after = self.snapshot(&mut g);
         let machine = after
             .iter()
-            .find(|(n, _)| n == "RIP")
+            .find(|(n, _)| n == self.pc_name())
             .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .and_then(|rip| g.read_memory(rip, 15).ok())
             .unwrap_or_default();
@@ -156,7 +264,7 @@ impl DebugSession {
         let after = self.snapshot(&mut g);
         let machine = after
             .iter()
-            .find(|(n, _)| n == "RIP")
+            .find(|(n, _)| n == self.pc_name())
             .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .and_then(|rip| g.read_memory(rip, 15).ok())
             .unwrap_or_default();
@@ -327,6 +435,7 @@ impl DebugSession {
 
     fn build_report(&self, before: &[(String, String)], after: &[(String, String)], stop: &lab_adapters::gdb::GdbStop, machine: &[u8]) -> StepReport {
         let isa = &self.isa;
+        let pc_reg = self.pc_name();
 
         let before_map: HashMap<&str, &str> = before.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         let after_map: HashMap<&str, &str> = after.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
@@ -369,18 +478,18 @@ impl DebugSession {
             }
         }
 
-        // 反汇编:用调用方读好的机器码(锁外)
+        // 反汇编:用调用方读好的机器码(锁外);按 ISA 分派(arm64 → yaxpeax)
         let (disasm, mnemonic, machine_hex) =
-            match lab_adapters::iced::disassemble_one(machine, after_map.get("RIP").and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0)) {
+            match lab_adapters::disasm_one_for(&self.arch, &machine, after_map.get(pc_reg).and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0)) {
                 Ok(Some(l)) => (l.text.clone(), l.mnemonic.clone(), l.bytes_hex.clone()),
                 _ => (String::new(), String::new(), String::new()),
             };
 
         let next_rip = after_map
-            .get("RIP")
+            .get(pc_reg)
             .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
-        let from = before_map.get("RIP").and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
+        let from = before_map.get(pc_reg).and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
         // seq_to 用实际指令长度(iced 解析):写死 from+1 会把变长指令顺序执行误标为 branch
         let inst_len = lab_adapters::iced::disassemble_one(&machine, next_rip)
             .ok()

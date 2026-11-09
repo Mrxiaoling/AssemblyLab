@@ -47,6 +47,9 @@ pub struct CreateDebugReq {
     /// g++(默认)| clang++(协程帧 DWARF 最完整)
     #[serde(default)]
     pub compiler: String,
+    /// 模式 B 目标架构(默认 x86-64 本地;arm64 = 远程真机 gdbserver)
+    #[serde(default)]
+    pub isa: String,
 }
 
 fn default_opt() -> String {
@@ -155,7 +158,7 @@ pub async fn create_session(
     State(app): State<AppState>,
     Json(req): Json<CreateDebugReq>,
 ) -> ApiResult<DebugSessionResp> {
-    let isa: IsaDefinition = app.load_isa("x86-64").map_err(ApiError)?;
+    let isa: IsaDefinition = app.load_isa(if req.isa.is_empty() { "x86-64" } else { &req.isa }).map_err(ApiError)?;
     let id = app.debug_sessions.next_id.fetch_add(1, Ordering::SeqCst);
     let source = req.source.clone();
     let opt = req.opt.clone();

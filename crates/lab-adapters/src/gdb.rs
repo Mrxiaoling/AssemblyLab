@@ -283,11 +283,27 @@ impl GdbSession {
     /// 在 wsl_dir(WSL 路径)内调试 ./main。
     /// 传输:wsl 内 socat 把 gdb/MI 挂到 TCP(绕开 wsl.exe stdin 管道中继的 30s 延迟 bug)。
     pub fn spawn(wsl_dir: &str) -> Result<Self, LabError> {
+        Self::spawn_debug(wsl_dir, "gdb", None)
+    }
+
+    /// ARM64 远程调试(P8):WSL 内 gdb-multiarch 经 socat 挂 MI,
+    /// `target remote` 连接远端 gdbserver(用户提供的 ARM64 机器)。
+    /// 流程:交叉编译 → scp 到远端 → ssh 启动 gdbserver → gdb-multiarch 连接。
+    pub fn spawn_multiarch_remote(wsl_dir: &str, remote_target: &str) -> Result<Self, LabError> {
+        Self::spawn_debug(wsl_dir, "gdb-multiarch", Some(remote_target.to_string()))
+    }
+
+    pub fn spawn_debug(
+        wsl_dir: &str,
+        gdb_bin: &str,
+        remote_target: Option<String>,
+    ) -> Result<Self, LabError> {
         let port = next_gdb_port();
         let script = format!(
-            "cd '{wsl_dir}' && exec socat TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr EXEC:\"gdb --interpreter=mi2 ./main\"",
+            "cd '{wsl_dir}' && exec socat TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr EXEC:\"{gdb_bin} -interpreter=mi2 ./main\"",
             wsl_dir = wsl_dir,
-            port = port
+            port = port,
+            gdb_bin = gdb_bin
         );
         let mut socat = Command::new("wsl.exe")
             .args(["-d", WSL_DISTRO, "-e", "bash", "-c", &script])
@@ -336,6 +352,11 @@ impl GdbSession {
             reg_names: Vec::new(),
         };
         s.wait_ready()?;
+        // 远程调试:连接远端 gdbserver(target-select;进程此时停在入口)
+        if let Some(rt) = remote_target {
+            s.exec_raw(&format!("-target-select remote {rt}"))
+                .map_err(|e| LabError::Emulator(format!("target remote 失败: {e}")))?;
+        }
         Ok(s)
     }
 
@@ -386,7 +407,8 @@ impl GdbSession {
                 Ok(line) => match classify(&line) {
                     RawLine::Result { token, class, results } => {
                         if token == Some(self.token) {
-                            if class == "done" || class == "running" {
+                            // "connected" 仅由 -target-select 成功时返回(P8 远程调试)
+                            if class == "done" || class == "running" || class == "connected" {
                                 return Ok(Ok(results));
                             }
                             let msg = results.get("msg").and_then(|m| m.as_str()).unwrap_or(&class).to_string();
@@ -533,6 +555,27 @@ impl GdbSession {
     }
 
     /// GPR 子集快照(与模式 A 面板对齐)
+    /// ARM64 快照(P8 远程调试):X0-X30/SP/PC/NZCV
+    pub fn snapshot_arm64(&mut self) -> Result<Vec<(String, String)>, LabError> {
+        let all = self.registers()?;
+        let mut out = Vec::new();
+        // X0-X30(gdb 名小写 x0-x30)
+        for i in 0..31 {
+            let name = format!("x{i}");
+            if let Some(v) = all.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, v)| v.clone()) {
+                out.push((format!("X{i}"), v));
+            }
+        }
+        // SP/PC/NZCV(值形如 "0x246 [ ... ]" → 取首个 token 的逻辑与 x86 一致)
+        for (gdb_name, display) in [("sp", "SP"), ("pc", "PC"), ("cpsr", "NZCV")] {
+            if let Some(v) = all.iter().find(|(n, _)| n.eq_ignore_ascii_case(gdb_name)).map(|(_, v)| v.clone()) {
+                let first = v.split_whitespace().next().unwrap_or(&v).to_string();
+                out.push((display.to_string(), first));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn snapshot(&mut self) -> Result<Vec<(String, String)>, LabError> {
         let all = self.registers()?;
         // (gdb 寄存器名, 面板显示名) — 与模式 A 的 RFLAGS 命名对齐
