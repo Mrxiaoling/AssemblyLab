@@ -90,3 +90,16 @@ cd web && npx vite --port 5199           # 前端
 | 测试 | WSL 依赖测试在沙箱/CI 大面积失败、vitest 0 用例 | WSL 运行时探测跳过(wsl_available);vitest 覆盖 memdecode(8 用例);TEST_PLAN 环境依赖说明 |
 
 修复后:19 套件 35 项测试全绿(rc=0);vitest 8/8;vue-tsc 零错误。
+
+---
+
+## 附:P8 可选方向完成(2026-11-09 追加)
+
+| 方向 | 交付 |
+|---|---|
+| compare 逐行 diff | 恰好两列时「⟷ 逐行对照」切换:归一化文本 LCS 对齐,相同/差异行着色 + 统计(相同 N/差异 M) |
+| 模式 B ARM64 远程真机调试 | 交叉编译(aarch64-linux-gnu-g++)→ scp 推送 → 远端 gdbserver(固定端口 2345)→ WSL gdb-multiarch `target remote` 连接;DebugSession 按 ISA 分派(Arch 字段 + pc_name()/snapshot_arm64/disasm 分派);API isa 参数;实测:真机断点/寄存器(X0/PC)/ARM64 反汇编 |
+| AI 助教外部 LLM 挂点 | `POST /api/tutor/llm`:prompt 注入**本地检索到的真实上下文**(ISA notes),转发至 OpenAI 兼容端点(ASSEMBLYLAB_AI_ENDPOINT/KEY/MODEL 环境变量);未配置返回配置说明;**零端点内置,离线纯净** |
+
+**ARM64 远程调试流程**:交叉编译(WSL aarch64-linux-gnu-g++)→ scp 推送到远端(免密 ssh)→ 远端 gdbserver(固定端口 2345,nohup+exit 后台存活)→ WSL gdb-multiarch `target remote` 连接。实测:真机断点/单步/寄存器(X0/PC)/ARM64 反汇编全通。
+**P8 排查中发现的两个新坑**:① `ldr =label` 字面池条目留重定位(objcopy 扁平二进制不应用)→ 读出 0——源码一律用 `adr`(±1MB);② 远端残留 gdbserver 占用二进制 → scp "dest open Failure"——scp 前先 pkill 远端 gdbserver。

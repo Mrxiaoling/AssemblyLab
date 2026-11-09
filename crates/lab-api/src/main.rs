@@ -7,6 +7,7 @@ mod debug;
 mod export;
 mod knowledge;
 mod tutor;
+mod tutor_llm;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
@@ -42,6 +43,7 @@ async fn main() {
         .route("/api/knowledge", get(knowledge::get_knowledge))
         .route("/api/mistakes", get(knowledge::get_mistakes))
         .route("/api/tutor", post(tutor::tutor))
+        .route("/api/tutor/llm", post(tutor_llm::tutor_llm))
         .route("/api/export/course/{id}", get(export::export_course))
         .route("/api/export/all", get(export::export_all));
 

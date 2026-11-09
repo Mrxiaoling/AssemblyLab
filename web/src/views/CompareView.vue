@@ -107,6 +107,43 @@ function insCount(e: CompareEntry) {
 }
 
 const optColors: Record<string, string> = { O0: '#e69055', O1: '#63e2b7', O2: '#82aaff', O3: '#e05f9b' }
+
+// 逐行对照(恰好两列时):按归一化文本(忽略地址)LCS 对齐
+const diffMode = ref(false)
+const diffPair = computed(() => {
+  if (entries.value.length !== 2) return null
+  const [a, b] = entries.value
+  const norm = (l: { text: string }) => l.text.replace(/\s+/g, ' ').trim()
+  const aTexts = a.asm_lines.filter((l) => l.addr).map((l) => norm(l))
+  const bTexts = b.asm_lines.filter((l) => l.addr).map((l) => norm(l))
+  const dp = Array.from({ length: aTexts.length + 1 }, () => new Array(bTexts.length + 1).fill(0))
+  for (let i = aTexts.length - 1; i >= 0; i--) {
+    for (let j = bTexts.length - 1; j >= 0; j--) {
+      dp[i][j] = aTexts[i] === bTexts[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const rows: { a: string | null; b: string | null; same: boolean }[] = []
+  let i = 0, j = 0
+  while (i < aTexts.length && j < bTexts.length) {
+    if (aTexts[i] === bTexts[j]) {
+      rows.push({ a: aTexts[i], b: bTexts[j], same: true }); i++; j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ a: aTexts[i], b: null, same: false }); i++
+    } else {
+      rows.push({ a: null, b: bTexts[j], same: false }); j++
+    }
+  }
+  while (i < aTexts.length) { rows.push({ a: aTexts[i], b: null, same: false }); i++ }
+  while (j < bTexts.length) { rows.push({ a: null, b: bTexts[j], same: false }); j++ }
+  return rows
+})
+const diffStats = computed(() => {
+  const rows = diffPair.value
+  if (!rows) return null
+  const same = rows.filter((r) => r.same).length
+  return { total: rows.length, same, diff: rows.length - same }
+})
+
 function targetLabel(c: string): string {
   if (c === 'g++' || c === 'clang++') return 'x86-64 SysV'
   if (c === 'x86_64-w64-mingw32-g++') return 'Win64'
@@ -141,6 +178,12 @@ export default { name: 'CompareView' }
         clearable
       />
       <div style="flex: 1" />
+      <n-button v-if="entries.length === 2" size="small" @click="diffMode = !diffMode">
+        {{ diffMode ? ' viewing 并排视图' : '⟷ 逐行对照' }}
+      </n-button>
+      <n-tag v-if="diffStats" size="small" type="info" :bordered="false">
+        相同 {{ diffStats.same }} / 差异 {{ diffStats.diff }}
+      </n-tag>
       <n-tag size="small" type="warning" :bordered="false">编译在 WSL 内执行(进程级限制)</n-tag>
     </div>
     <n-alert v-if="error" type="error" size="small" closable @close="error = ''">{{ error }}</n-alert>
@@ -173,7 +216,25 @@ export default { name: 'CompareView' }
             </div>
           </div>
         </div>
-        <div v-else-if="!busy" class="placeholder">
+        <!-- 逐行对照(合并视图) -->
+        <div v-if="entries.length === 2 && diffMode && diffPair" class="col panel" style="margin-top: 4px">
+          <div class="panel-title">逐行对照(忽略地址;绿=相同,黄=仅一侧)</div>
+          <div class="panel-body">
+            <table class="difftable">
+              <tbody>
+                <tr v-for="(r, i) in diffPair" :key="i" :class="r.same ? 'same' : 'diffrow'">
+                  <td class="d-mark">{{ r.same ? '=' : '≠' }}</td>
+                  <td class="d-a">{{ r.a ?? '—' }}</td>
+                  <td class="d-b">{{ r.b ?? '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div v-if="diffMode && entries.length !== 2 && !busy" class="col panel" style="margin-top: 4px; padding: 10px; color: #555">
+          逐行对照需要恰好两列(当前 {{ entries.length }} 列)
+        </div>
+        <div v-if="!entries.length && !busy" class="placeholder">
           <div class="ph-title">同一 C++ 源码,多优化级别并排对比</div>
           <div class="ph-item">① 左侧写代码(或用预置的 sum_to)→ ② 勾选 O0..O3 → ③ 点「编译对比」</div>
           <div class="ph-item">观察点:循环去哪了?函数还在吗?哪一级把 sum_to 直接算成数学公式?</div>
@@ -204,6 +265,10 @@ export default { name: 'CompareView' }
 .asm tr.src td.t { color: #e8e8e8; }
 .asm tr.lab td.t { color: #82aaff; }
 .placeholder { margin: auto; text-align: center; color: #777; max-width: 640px; }
+.difftable { width: 100%; font-size: 12px; border-collapse: collapse; }
+.difftable tr.same td { color: #9ad1a8; }
+.difftable tr.diffrow td { color: #e6c04a; background: rgba(230, 192, 74, 0.06); }
+.difftable .d-mark { width: 24px; color: #666; text-align: center; }
 .ph-title { font-size: 18px; color: #999; margin-bottom: 14px; }
 .ph-item { font-size: 13px; margin: 6px 0; }
 </style>
