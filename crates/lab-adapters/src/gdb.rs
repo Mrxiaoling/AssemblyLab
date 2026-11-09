@@ -285,7 +285,7 @@ impl GdbSession {
     pub fn spawn(wsl_dir: &str) -> Result<Self, LabError> {
         let port = next_gdb_port();
         let script = format!(
-            "cd '{wsl_dir}' && exec socat TCP-LISTEN:{port},reuseaddr EXEC:\"gdb --interpreter=mi2 ./main\"",
+            "cd '{wsl_dir}' && exec socat TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr EXEC:\"gdb --interpreter=mi2 ./main\"",
             wsl_dir = wsl_dir,
             port = port
         );
@@ -357,6 +357,14 @@ impl GdbSession {
         }
     }
 
+    /// 命令超时/停滞时硬杀 socat + gdb进程树(README:超时不是沙箱,
+    /// 不能让失控的调试进程残留;Drop 不触发的场景由本方法兜底)。
+    fn hard_kill(&mut self) {
+        let _ = self.socat.kill();
+        let _ = self.socat.wait();
+        *self.stream_tx.lock().unwrap() = None;
+    }
+
     fn send(&mut self, cmd: &str) -> Result<(), LabError> {
         self.token += 1;
         let mut guard = self.stream_tx.lock().unwrap();
@@ -389,7 +397,10 @@ impl GdbSession {
                     RawLine::Stop(_) => { /* exec-run 等场景由专用方法消费 */ }
                     _ => {}
                 },
-                Err(RecvTimeoutError::Timeout) => return Err(LabError::Emulator(format!("gdb 响应超时: {cmd}"))),
+                Err(RecvTimeoutError::Timeout) => {
+                    self.hard_kill();
+                    return Err(LabError::Emulator(format!("gdb 响应超时(已终止调试进程): {cmd}")));
+                }
                 Err(_) => return Err(LabError::Emulator("gdb 进程退出".into())),
             }
         }
@@ -601,7 +612,17 @@ impl GdbSession {
     /// 用于 ptype / 打印结构体等 MI 原生不覆盖的场景。
     pub fn console_capture(&mut self, cmd: &str) -> Result<String, LabError> {
         // console 参数内不能有裸双引号
-        debug_assert!(!cmd.contains('"'), "console 命令含双引号: {cmd}");
+        // 白名单:console 通道只允许只读 gdb 命令(打印/类型/查看),
+        // 防止 "-interpreter-exec console \"shell …\"" 执行任意命令(release 下 debug_assert 失效)
+        const ALLOWED_CONSOLE_PREFIXES: [&str; 4] = ["p ", "ptype", "info ", "x "];
+        if !ALLOWED_CONSOLE_PREFIXES.iter().any(|p| cmd.starts_with(p)) {
+            return Err(LabError::BadRequest(format!(
+                "console 命令不在白名单(仅允许只读 p/ptype/info/x): {cmd}"
+            )));
+        }
+        if cmd.contains('"') || cmd.contains(';') || cmd.contains('`') || cmd.contains('$') {
+            return Err(LabError::BadRequest(format!("console 命令含非法字符: {cmd}")));
+        }
         self.send(&format!("-interpreter-exec console \"{cmd}\""))?;
         let deadline = std::time::Instant::now() + CMD_TIMEOUT;
         let mut out = String::new();

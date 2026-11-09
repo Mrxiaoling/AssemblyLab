@@ -381,7 +381,13 @@ impl DebugSession {
             .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
         let from = before_map.get("RIP").and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
-        let kind = crate::classify_jump(if mnemonic.is_empty() { None } else { Some(&mnemonic) }, from + 1, next_rip);
+        // seq_to 用实际指令长度(iced 解析):写死 from+1 会把变长指令顺序执行误标为 branch
+        let inst_len = lab_adapters::iced::disassemble_one(&machine, next_rip)
+            .ok()
+            .flatten()
+            .map(|l| l.size as u64)
+            .unwrap_or(1);
+        let kind = crate::classify_jump(if mnemonic.is_empty() { None } else { Some(&mnemonic) }, from + inst_len, next_rip);
 
         // 解释:元数据 + 真实 diff + 源码行
         let note = isa.note_for(&mnemonic);

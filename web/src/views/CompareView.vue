@@ -107,6 +107,12 @@ function insCount(e: CompareEntry) {
 }
 
 const optColors: Record<string, string> = { O0: '#e69055', O1: '#63e2b7', O2: '#82aaff', O3: '#e05f9b' }
+function targetLabel(c: string): string {
+  if (c === 'g++' || c === 'clang++') return 'x86-64 SysV'
+  if (c === 'x86_64-w64-mingw32-g++') return 'Win64'
+  if (c === 'aarch64-linux-gnu-g++') return 'ARM64'
+  return c
+}
 </script>
 
 <script lang="ts">
@@ -152,7 +158,7 @@ export default { name: 'CompareView' }
           <div v-for="e in entries" :key="e.opt + e.compiler" class="col panel">
             <div class="panel-title">
               <span :style="{ color: optColors[e.opt] ?? '#fff', fontWeight: 600 }">{{ e.opt }}</span>
-              <span style="color: #666; font-size: 11px">{{ e.compiler === 'g++' ? 'SysV' : 'Win64' }}</span>
+              <span style="color: #666; font-size: 11px">{{ targetLabel(e.compiler) }}</span>
               <n-tag size="tiny" :bordered="false">{{ insCount(e) }} 指令</n-tag>
             </div>
             <div class="panel-body">

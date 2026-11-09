@@ -1378,4 +1378,18 @@ Phase 0 交付：
 
 最终输出 Phase 0 的所有设计文档，并给出 Phase 1 的详细任务拆分和验收标准。
 
+---
+
+# 实现状态注记(2026-11-09,实现方追加)
+
+上方"当前任务"为初始指令,存档保留。当前实现状态:**Phase 0-7 全部交付完毕**。
+
+- 27 门课(十阶段)/ 20 道题(8 种题型)/ 知识图谱(113 节点)/ AI 助教 / 离线课程包导出 / 双架构(x86-64 与 ARM64)实验室
+- 测试:19 套件 35 项全绿;各阶段验收报告见 `docs/PHASE1-REPORT.md` 至 `docs/PHASE7-REPORT.md`
+- 运行:`cargo run -p lab-api` + `cd web && npx vite --port 5199`
+
+## 附:第三方组件许可证注记
+
+- `vendor/unicorn.dll`:Unicorn Engine 2.1.4,**GPL-2.0 许可证**(来源:PyPI 官方 wheel,验证见 spikes/unicorn_step_diff/RESULT.md)。仅限本地个人使用不触发分发义务;**若需分发本平台二进制,须遵守 GPL-2.0 或切换自研解释器**(接口已隔离,见 EXPERIMENT_ENGINE.md)。其余代码与数据文件不受此约束。
+
 完成后暂停，等待我确认，不要擅自进入 Phase 1。

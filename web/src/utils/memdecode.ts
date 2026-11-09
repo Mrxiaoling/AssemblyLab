@@ -41,10 +41,11 @@ function bytesOf(hex: string, off: number, n: number): number[] {
   return out
 }
 
-/** 按端序把 bytes 组成大整数(lowercase hex 字符串),little=true 时 bytes[0] 为最低有效字节 */
+/** 按端序把 bytes 组成大整数:little=true 时 bytes[0] 为最低有效字节(LE 解码:值 = Σ b[i]<<8i) */
 function combine(bytes: number[], little: boolean): bigint {
   let v = 0n
-  const seq = little ? bytes : [...bytes].reverse()
+  // LE 解码:从最高位字节开始 shift-left → seq 需反转(bytes[0] 最后进 MSB 之外的位置)
+  const seq = little ? [...bytes].reverse() : bytes
   for (const b of seq) v = (v << 8n) | BigInt(b)
   return v
 }

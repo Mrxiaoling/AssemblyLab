@@ -16,7 +16,7 @@ async fn main() {
     tracing_subscriber_init();
     sweep_temp_dirs();
     let state = api::AppState::new();
-    let app = Router::new()
+    let base = Router::new()
         .route("/api/health", get(api::health))
         .route("/api/isas", get(api::list_isas))
         .route("/api/isas/{id}", get(api::get_isa))
@@ -43,18 +43,39 @@ async fn main() {
         .route("/api/mistakes", get(knowledge::get_mistakes))
         .route("/api/tutor", post(tutor::tutor))
         .route("/api/export/course/{id}", get(export::export_course))
-        .route("/api/export/all", get(export::export_all))
-        .route("/api/debug/sessions", post(debug::create_session))
-        .route("/api/debug/sessions/{id}", delete(debug::delete_session))
-        .route("/api/debug/sessions/{id}/step", post(debug::step))
-        .route("/api/debug/sessions/{id}/run", post(debug::run))
-        .route("/api/debug/sessions/{id}/finish", post(debug::finish))
-        .route("/api/debug/sessions/{id}/breakpoints", put(debug::put_breakpoints))
-        .route("/api/debug/sessions/{id}/watchpoints", put(debug::put_watchpoints))
-        .route("/api/debug/sessions/{id}/coro", get(debug::get_coro))
-        .route("/api/debug/sessions/{id}/frames", get(debug::get_frames))
-        .route("/api/debug/sessions/{id}/memory", get(debug::get_memory))
-        .with_state(state);
+        .route("/api/export/all", get(export::export_all));
+
+    // 模式 B(真机调试)默认关闭——README SECURITY:做不到强隔离要默认禁用。
+    // 明确知情后以 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1 开启(WSL gdb + 用户编译的原生二进制,
+    // 隔离等级 = 进程级限制,非强沙箱;详见 docs/SECURITY_DESIGN.md)
+    let unsafe_debug = std::env::var("ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG").ok().as_deref() == Some("1");
+    let app = if unsafe_debug {
+        base
+            .route("/api/debug/sessions", post(debug::create_session))
+            .route("/api/debug/sessions/{id}", delete(debug::delete_session))
+            .route("/api/debug/sessions/{id}/step", post(debug::step))
+            .route("/api/debug/sessions/{id}/run", post(debug::run))
+            .route("/api/debug/sessions/{id}/finish", post(debug::finish))
+            .route("/api/debug/sessions/{id}/breakpoints", put(debug::put_breakpoints))
+            .route("/api/debug/sessions/{id}/watchpoints", put(debug::put_watchpoints))
+            .route("/api/debug/sessions/{id}/coro", get(debug::get_coro))
+            .route("/api/debug/sessions/{id}/frames", get(debug::get_frames))
+            .route("/api/debug/sessions/{id}/memory", get(debug::get_memory))
+            .with_state(state)
+    } else {
+        base.with_state(state)
+            .route(
+                "/api/debug/{*rest}",
+                axum::routing::any(|| async {
+                    axum::Json(serde_json::json!({
+                        "error": {
+                            "kind": "debug_disabled",
+                            "message": "模式 B(真机调试)默认关闭:隔离等级为进程级限制,非强沙箱。知情后以 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1 启动后端开启。"
+                        }
+                    }))
+                }),
+            )
+    };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:7600").await.unwrap();
     tracing::info!("Assembly Lab API listening on http://127.0.0.1:7600");

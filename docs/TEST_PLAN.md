@@ -106,3 +106,12 @@
 | D-TST-2 | 内容一致性作为独立构建步骤(lab-content-check) | 只靠人工核对 | README 十一节第 6/7 条的机械化落实 |
 | D-TST-3 | 正文关键数值用模板引用 golden | 手写数字 + 复查 | 教学文案与执行真值强绑定,改实验自动暴露过期文案 |
 | D-TST-4 | E2E 用手动清单起步,Playwright 延后 | 直接上 Playwright | 本地单用户工具,先保验收效率,前端稳定后再自动化 |
+
+---
+
+## 附:测试环境依赖说明(P7 收官补充)
+
+- **WSL 依赖**:compiler_tests / debug_tests(真实 g++/gdb)依赖 WSL2 Ubuntu-22.04 + g++/gdb/socat。已加运行时探测(`wsl_available()`):WSL 不可用时**跳过并输出 skip 日志**(CI/其他机器不再大面积失败);wsl_probe 默认 `#[ignore]`。
+- **纯本地测试**(无 WSL 依赖):unicorn / nasm / iced / isa / judge / engine / content_tests 在任意 Linux/Windows 机器可跑。
+- ** Golden/正文数值**:课程正文中的寄存器数值目前手写并与实验源码绑定(改源码需同步正文);content_tests 的模式 A 校验保证实验本身可跑通,正文数值的自动比对列为 P8 项。
+- **前端**:vue-tsc 类型检查 + vite build;vitest 覆盖 memdecode 解码逻辑(端序/浮点/符号)。

@@ -101,7 +101,9 @@ pub fn detect_mingw() -> Option<String> {
 
 /// 编译 C++ 并产出带源码行标注的反汇编。
 pub fn compile(req: &CompileRequest) -> Result<CompileOutput, LabError> {
-    if !req.opt.starts_with('O') || req.opt.len() != 2 {
+    // 精确白名单:opt 会被拼进 shell 命令,防止 "O;/..." 类注入
+    const ALLOWED_OPTS: [&str; 4] = ["O0", "O1", "O2", "O3"];
+    if !ALLOWED_OPTS.contains(&req.opt.as_str()) {
         return Err(LabError::BadRequest(format!("opt 须为 O0..O3,收到 {}", req.opt)));
     }
     let compiler = if req.compiler.is_empty() { "g++".to_string() } else { req.compiler.clone() };

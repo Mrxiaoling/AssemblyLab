@@ -49,7 +49,7 @@ export default { name: 'TutorView' }
   <div style="max-width: 900px; margin: 0 auto; padding: 20px">
     <h2 style="color:#63e2b7; margin-top: 0">🧑‍🏫 助教</h2>
     <p style="color:#888; font-size:13px">
-      本地检索式引擎:回答全部基于真实数据(ISA 注释 / 26 门课程 / 19 道习题解析 / 知识图谱),
+      本地检索式引擎:回答全部基于真实数据(ISA 注释 / 27 门课程 / 20 道习题解析 / 知识图谱),
       <b>零编造、零网络</b>。README 第九节的 AI 职责(解释指令/分析行为/对比 C++/盲点分析/推荐)由确定性检索覆盖。
     </p>
     <n-input

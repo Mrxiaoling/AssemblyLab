@@ -343,11 +343,19 @@ impl IsaDefinition {
     /// 单文件制:registers/flags/abi/notes 都并入 isa.toml(Phase 1 简化,
     /// 拆分文件留待内容规模增大后)。
     pub fn load_from_dir(data_dir: &Path, isa_id: &str) -> Result<IsaDefinition, LabError> {
+        // id 白名单:防路径遍历(..、绝对路径、特殊字符)
+        if isa_id.is_empty()
+            || !isa_id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(LabError::IsaNotFound(isa_id.to_string()));
+        }
         let path = data_dir.join("isas").join(isa_id).join("isa.toml");
         let text = std::fs::read_to_string(&path)
-            .map_err(|e| LabError::Io(format!("读取 {}: {e}", path.display())))?;
+            .map_err(|_| LabError::IsaNotFound(isa_id.to_string()))?;
         let pkg: IsaPackage = toml::from_str(&text)
-            .map_err(|e| LabError::BadRequest(format!("解析 {}: {e}", path.display())))?;
+            .map_err(|e| LabError::BadRequest(format!("ISA {isa_id} 数据解析失败: {e}")))?;
         let def = pkg.isa();
         if def.id != isa_id {
             return Err(LabError::BadRequest(format!(

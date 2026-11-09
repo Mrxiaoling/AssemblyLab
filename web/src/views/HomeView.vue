@@ -51,7 +51,9 @@ onMounted(async () => {
       </n-card>
 
       <n-card title="学习进度" size="small">
-        <p style="color: #888; margin: 0">课程框架与习题中心在 M3 交付(ROADMAP T1.9–T1.11)。当前阶段:实验工作台。</p>
+        <p style="color: #888; margin: 0">
+          全部 7 个阶段已交付:27 门课(10 个阶段)/ 20 道题(8 种题型)/ 知识图谱 / AI 助教 / 离线课程包 / 双架构(x86-64 与 ARM64)实验室。
+        </p>
       </n-card>
     </n-space>
   </div>

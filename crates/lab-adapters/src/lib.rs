@@ -20,15 +20,21 @@ use lab_core::LabError;
 /// 按目标反汇编(ISA 分派:x86-64 → iced;arm64 → yaxpeax)。
 pub fn disasm_for(isa_id: &str, code: &[u8], addr: u64) -> Result<Vec<iced::DisasmLine>, LabError> {
     match isa_id {
+        "x86-64" => iced::disassemble(code, addr),
         "arm64" => arm64dis::disassemble(code, addr),
-        _ => iced::disassemble(code, addr),
+        other => Err(LabError::BadRequest(format!(
+            "未知 ISA {other}:不按 x86-64 静默反汇编(错误教学数据)"
+        ))),
     }
 }
 
 /// 单条反汇编(同上分派)。
 pub fn disasm_one_for(isa_id: &str, code: &[u8], addr: u64) -> Result<Option<iced::DisasmLine>, LabError> {
     match isa_id {
+        "x86-64" => iced::disassemble_one(code, addr),
         "arm64" => arm64dis::disassemble_one(code, addr),
-        _ => iced::disassemble_one(code, addr),
+        other => Err(LabError::BadRequest(format!(
+            "未知 ISA {other}:不按 x86-64 静默反汇编(错误教学数据)"
+        ))),
     }
 }

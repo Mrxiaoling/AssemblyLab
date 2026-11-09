@@ -64,6 +64,11 @@ impl AppState {
         &self.data_dir
     }
 
+    /// 当前活跃会话数(会话上限用)
+    pub fn session_count(&self) -> usize {
+        self.sessions.lock().unwrap().len()
+    }
+
     pub fn load_isa(&self, id: &str) -> Result<lab_core::IsaDefinition, LabError> {
         lab_core::isa::IsaDefinition::load_from_dir(self.data_dir(), id)
     }
@@ -341,6 +346,13 @@ pub async fn create_session(
     State(st): State<AppState>,
     Json(req): Json<CreateSessionReq>,
 ) -> ApiResult<SessionResp> {
+    // 会话上限:本地工具防资源失控(每会话一份 Unicorn 实例)
+    const MAX_SESSIONS: usize = 32;
+    if st.session_count() >= MAX_SESSIONS {
+        return Err(ApiError(LabError::BadRequest(format!(
+            "会话数已达上限 {MAX_SESSIONS}(每个会话持有独立的模拟器实例);请先删除不用的会话"
+        ))));
+    }
     let isa = st.load_isa(&req.isa).map_err(ApiError)?;
     let id = st.next_id.fetch_add(1, Ordering::SeqCst);
     let source = req.source.clone();

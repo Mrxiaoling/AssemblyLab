@@ -254,8 +254,32 @@ pub async fn get_exercise(
         knowledge: ex.exercise.knowledge.clone(),
         lesson: ex.exercise.lesson.clone(),
         predict: ex.predict.map(|p| serde_json::to_value(p).unwrap_or_default()),
-        fill_blank: ex.fill_blank.map(|p| serde_json::to_value(p).unwrap_or_default()),
-        quiz: ex.quiz.map(|p| serde_json::to_value(p).unwrap_or_default()),
+        // fill_blank/quiz 的判题依据(testcases 的期望值/quiz 的参考答案)不得泄漏给前端:
+        // 只下发题面结构,期望值由判题器在提交时以真实执行/比对得出
+        fill_blank: ex.fill_blank.map(|p| {
+            let mut v = serde_json::to_value(p).unwrap_or_default();
+            if let Some(t) = v.get_mut("testcases").and_then(|x| x.as_array_mut()) {
+                for tc in t {
+                    tc.as_object_mut().map(|o| {
+                        o.remove("expect_mem");
+                        o.remove("expect_exit_code");
+                        o.remove("expect_output");
+                    });
+                }
+            }
+            v
+        }),
+        quiz: ex.quiz.map(|p| {
+            let mut v = serde_json::to_value(p).unwrap_or_default();
+            if let Some(qs) = v.get_mut("questions").and_then(|x| x.as_array_mut()) {
+                for q in qs {
+                    q.as_object_mut().map(|o| {
+                        o.remove("expect");
+                    });
+                }
+            }
+            v
+        }),
         self_check: ex.self_check.map(|p| serde_json::to_value(p).unwrap_or_default()),
         attempt_count: attempts.len() as i64,
         status,
@@ -384,6 +408,14 @@ pub async fn put_progress(
     Path(id): Path<String>,
     Json(req): Json<PutProgressReq>,
 ) -> ApiResult<ProgressResp> {
+    // 状态白名单:防任意值篡改进度
+    const ALLOWED_STATUS: [&str; 3] = ["not_started", "in_progress", "done"];
+    if !ALLOWED_STATUS.contains(&req.status.as_str()) {
+        return Err(ApiError(lab_core::LabError::BadRequest(format!(
+            "非法进度状态 {}(可选 not_started/in_progress/done)",
+            req.status
+        ))));
+    }
     if let Some(s) = st.storage() {
         s.set_progress(&id, &req.status)
             .map_err(|e| ApiError(lab_core::LabError::Io(e)))?;
