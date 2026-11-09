@@ -1,0 +1,32 @@
+# 习题:补全指令(阶段一)
+
+[exercise]
+id = "stage01-q02-fill-sum"
+type = "fill_blank"
+title = "补全:让程序算出 10+20 并存入内存"
+stage = 1
+lesson = "stage01-lesson01"
+knowledge = ["mov", "add", "memory-write"]
+difficulty = 2
+related_experiment = "stage01-lesson01"
+
+hints.level1 = "缺的是把 RBX 加到 RAX 上的那条指令。"
+hints.level2 = "`add rax, rbx`(大小写均可)。"
+
+[fill_blank]
+hole_hint = "一条指令:完成 RAX = RAX + RBX"
+asm_template = '''
+[bits 64]
+org 0x400000
+mov eax, 10
+mov ebx, 20
+??
+mov [0x400100], rax
+mov rax, 60
+mov edi, 3
+syscall
+'''
+
+[[fill_blank.testcases]]
+expect_exit_code = 3
+expect_mem = { addr = "0x400100", qword_le = "0x1e" }

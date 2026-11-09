@@ -1,0 +1,32 @@
+# 习题:补全绝对值(阶段二)
+
+[exercise]
+id = "stage02-q02-fill-abs"
+type = "fill_blank"
+title = "补全:一条指令实现有符号取负"
+stage = 2
+lesson = "stage02-lesson02"
+knowledge = ["neg", "flags"]
+difficulty = 2
+
+hints.level1 = "有专门的取负指令(0 - x)。"
+hints.level2 = "`neg eax`(0 - x,并按结果设置标志位)。"
+answer_md = "`neg eax` 把 RAX 变为 5;NEG 相当于 SUB 0,x,CF=0 仅当操作数为 0。"
+common_mistakes = ["写成 not eax(按位取反,-5 的按位反是 4,不是 5)"]
+
+[fill_blank]
+hole_hint = "一条指令:RAX = -RAX(有符号)"
+asm_template = '''
+[bits 64]
+org 0x400000
+mov eax, 0xFFFFFFFB    ; -5
+??                     ; 取负 → 5
+mov [0x400100], rax
+mov rax, 60
+mov edi, 5
+syscall
+'''
+
+[[fill_blank.testcases]]
+expect_exit_code = 5
+expect_mem = { addr = "0x400100", qword_le = "0x5" }

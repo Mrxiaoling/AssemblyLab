@@ -1,0 +1,45 @@
+# 习题:数组求和预测(阶段三)
+
+[exercise]
+id = "stage03-q01-predict-array-sum"
+type = "predict"
+title = "预测:数组求和循环跑完后的寄存器"
+stage = 3
+lesson = "stage03-lesson02"
+knowledge = ["array", "index-scale", "loop-pattern"]
+difficulty = 3
+related_experiment = "stage03-lesson02"
+
+hints.level1 = "每次循环加的是 [rbx+rcx*4]:rcx 是下标,4 是 int 大小。逐圈累加即可。"
+hints.level2 = "3+7+11+5+9 = 35 = 0x23;循环结束时 rcx == 5(jge 刚失败)。"
+
+[predict]
+exec = "step:30"
+asm = '''
+[bits 64]
+org 0x400000
+lea rbx, [arr]
+xor ecx, ecx
+xor eax, eax
+.loop:
+cmp ecx, 5
+jge .done
+add eax, [rbx+rcx*4]
+inc ecx
+jmp .loop
+.done:
+mov rax, 60
+mov edi, 0
+syscall
+arr: dd 3, 7, 11, 5, 9
+'''
+
+[[predict.questions]]
+key = "RAX"
+prompt = "第 30 条指令(cmp ecx,5 第二轮失败的 jge 后)执行完,RAX = ?(十进制或 0x…)"
+expect_kind = "reg:EAX"
+
+[[predict.questions]]
+key = "RCX"
+prompt = "同一时刻,RCX = ?"
+expect_kind = "reg:ECX"

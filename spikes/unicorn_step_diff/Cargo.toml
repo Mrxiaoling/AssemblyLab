@@ -1,0 +1,11 @@
+[package]
+name = "unicorn_step_diff"
+version = "0.1.0"
+edition = "2021"
+
+# Phase 0 spike: validate Unicorn 2.1.4 (prebuilt MSVC x64 DLL, runtime-loaded)
+# can be driven for per-instruction state diff capture on Windows.
+# NOT product code.
+
+[profile.dev]
+opt-level = 1

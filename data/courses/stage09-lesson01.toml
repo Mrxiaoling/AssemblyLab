@@ -1,0 +1,154 @@
+# L9.1 — 阶段九:SIMD 数组加法(并发与数据并行 ①)
+
+[lesson]
+id = "stage09-lesson01"
+title = "一条指令算四个数:SSE 与 NEON 的同题异构"
+stage = 9
+requires = ["stage10-lesson01", "stage03-lesson02"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "for 循环里加 100 万个数,编译器怎么做到'一条指令加四个'?"
+outcomes = ["手写 SSE(paddd)与 NEON(add)向量加法", "在内存面板核对 lane 结果", "用优化对比页看编译器自动向量化"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "x86-64"
+source = '''[bits 64]
+org 0x400000
+global _start
+
+_start:
+    movdqa xmm0, [vec_a]      ; 载入 4x int(对齐 16)
+    movdqa xmm1, [vec_b]
+    paddd  xmm0, xmm1         ; 4 个 32 位 lane 同时加!
+    movdqa [out_vec], xmm0    ; 写回(内存面板核对)
+    mov     rax, 60
+    mov     edi, 0
+    syscall
+
+align 512
+vec_a:  dd 1, 2, 3, 4
+vec_b:  dd 10, 20, 30, 40
+out_vec: dd 0, 0, 0, 0
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+标量加法:`mov eax,[a]; add eax,[b]; mov [c],eax` = 3 条算 1 个数。
+SIMD:一条 `paddd` 同时算 **4 个 int**(128 位 XMM 切成 4 个 lane)。
+吞吐×4 的代价:数据必须按 lane 对齐、循环写法要利于编译器识别。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:跑一条 paddd"
+content = """
+点「打开本课实验」→ 运行 → 内存面板跳到 out_vec 地址(0x400210,见符号表),
+int32 视图:**11, 22, 33, 44**——四个和,一条指令。
+单步看 paddd 前后:XMM 不在面板(它 128 位),但内存说了一切。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "lane 的心智模型"
+content = """
+128 位 XMM 寄存器 = 4 个 32 位 lane 并排:
+
+```
+xmm0: [ 1 |  2 |  3 |  4 ]   ← movdqa 载入 vec_a
+xmm1: [10 | 20 | 30 | 40]    ← movdqa 载入 vec_b
+paddd:[11 | 22 | 33 | 44]    ← 4 个加法并行,互不进位
+```
+
+`movdqa` 要求 16 字节对齐(我们的 align 512 保证);对齐数据用 movdqu。
+**lane 之间不进位**:第一个 lane 溢出不会污染第二个——这也是 SIMD 的语义陷阱。
+"""
+
+[[steps]]
+kind = "state"
+title = "NEON 版:同题异构(ARM64)"
+content = """
+打开「学习中心 → 10·AArch64 基础」的 hands-on 已做过 NEON 加法;对照两套写法:
+
+| | x86 SSE | ARM64 NEON |
+|---|---|---|
+| 寄存器 | XMM0-XMM15(128 位) | V0-V31(128 位) |
+| 载入 | movdqa [mem] | ldr q0, [mem] |
+| 加 | paddd xmm0,xmm1(**按助记符定 lane 宽**) | add v1.2d, v0, v0(**按后缀定 lane 宽**) |
+|lane 指定|助记符尾巴(dd/ps/pd…)| 操作数后缀(.2d/.4s/.16b)|
+
+语义同构:宽寄存器 + lane 并行;语法哲学不同(x86 编码进助记符,ARM64 编进操作数)。
+"""
+
+[[steps]]
+kind = "theory"
+title = "编译器自动向量化:你的循环达标了吗"
+content = """
+「优化对比」页同一份 C++ 循环:
+
+```cpp
+void add(const int* a, const int* b, int* c, long n) {
+    for (long i = 0; i < n; i++) c[i] = a[i] + b[i];
+}
+```
+
+g++ -O2 x86:循环体变 `movdqu/paddd/movdqu` 块(SSE 自动向量化);
+aarch64-g++ -O2:`ldr q/paddq 或 add(.4s)/str q`。
+触发条件(没有):**len 未知仍可**向量(带尾循环)、但指针别名未知会阻止——
+`restrict` 或本地副本能让编译器放心。看汇编 = 唯一真相。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- 内在函数:`_mm_add_epi32(a, b)`(SSE)/ `vaddq_s32`(NEON)≈ 手写本课指令
+- -O0 下自动向量化关闭——优化对比页选 O0/O2 对比同一循环,一眼看到编译器替你写了 paddd
+- std::transform / std::reduce 配合连续内存最容易被向量化
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "SIMD 一定更快" —— 装卸数据(movdqa)本身有成本;短数组可能更慢
+- ❌ "lane 溢出会影响邻 lane" —— 各 lane 独立;但 paddd 不报溢出(要 _mm_adds_epi32 才饱和)
+- ❌ "编译器总能向量化" —— 别名/分支/依赖都会阻止;看汇编确认
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:改一个 lane 的输入"
+content = """
+把 vec_b 改成 `dd 10, 20, 30, 0xFFFFFFF0`(-16)再跑:
+out_vec 第 4 lane = 4 + (-16) = -12(int32 视图 = 0xFFFFFFF4)。
+再用 **uint32 视图** 看同一位置:4294967284——lane 算术的"两种视角"(阶段二的老朋友)。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:给定输入的 paddd 结果 lane 值。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- SIMD = 宽寄存器 + lane 并行;paddd 4 lane / add .2d 2 lane(64 位)
+- movdqa 对齐要求;lane 独立不进位
+- 自动向量化以汇编为准;restrict 助编译器一臂之力
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["sse-basics", "neon-basics", "auto-vectorization", "lane-semantics"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "原子操作:lock cmpxchg 与自旋锁。"

@@ -1,0 +1,131 @@
+# L3.4 — 阶段三:端序(内存与寻址 ④)
+
+[lesson]
+id = "stage03-lesson04"
+title = "端序:0x11223344 在内存里怎么排?"
+stage = 3
+requires = ["stage03-lesson01"]
+estimated_minutes = 30
+
+[lesson.goal]
+problem = "把 0x11223344 写进内存,字节视图里看到 44 33 22 11 —— 谁把顺序反了?"
+outcomes = ["理解小端/大端的定义", "会从字节流反推多字节值", "知道端序何时咬人(网络/文件/类型双关)"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    mov dword [val], 0x11223344   ; 一条指令写 4 字节
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+; align 512:数据与代码保持距离(模拟器翻译块边界,见阶段报告)
+align 512
+val: dd 0
+'''
+watch = ["RAX"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+`mov dword [val], 0x11223344` 执行后,
+内存字节视图显示 **44 33 22 11** —— 顺序反了?!
+
+没人反。这是 x86 的**小端序(little-endian)**:低字节放低地址。
+本节用两种视图把这件事看透。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:两种视图切换"
+content = """
+点「打开本课实验」,运行跑完,内存面板跳到 val 的地址(见符号表):
+
+1. **字节(hex)视图**:`44 33 22 11`
+2. **uint32 视图**:`0x11223344`(又"正常"了)
+
+同一块内存,两种读法——端序只在**把字节流重新解读为多字节数**时才现身。
+"""
+
+[[steps]]
+kind = "state"
+title = "小端的含义"
+content = """
+- **小端(little-endian)**:最低有效字节(LSB)在最低地址。x86/x86-64、ARM 默认配置
+- **大端(big-endian)**:最高有效字节在最低地址。网络字节序、部分文件格式(PNG 等)
+
+记忆:**小端 = "低位在.low"**,数值 0x11223344 的低位 44 存在地址最低处。
+CPU 做 32 位加减时永远从最低字节开始处理,小端让进位方向与地址增长方向一致——硬件友好。
+"""
+
+[[steps]]
+kind = "theory"
+title = "端序何时咬人"
+content = """
+1. **网络协议**:TCP 头字段是大端,直接把 int 写进缓冲区就是错的,要用 htons/htonl
+2. **跨平台文件**:同一段二进制数据在小端机上写、大端机上读,值全变
+3. **类型双关**:`float f = 1.0f; int bits = *(int*)&f;` —— 你读到的字节序取决于当前平台
+4. **调试抓包**:hex dump 里 44 33 22 11 其实是"正常"的 0x11223344
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+uint32_t x = 0x11223344;
+uint8_t* p = (uint8_t*)&x;
+// p[0]==0x44, p[1]==0x33, p[2]==0x22, p[3]==0x11 (x86)
+```
+编译期检测端序:`constexpr bool little = (x & 0xff) == 0x44;`
+C++20 可用 `std::endian::native`。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "内存里存反了" —— 端序是约定,不是错误
+- ❌ "char 数组也受端序影响" —— 单字节类型无端序可言
+- ❌ "浮点没有端序" —— float 的 4 字节同样按端序排
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:类型双关实验"
+content = """
+把 `dd 0` 后加一行数据再跑一遍,或直接在内存面板把 val 的 uint32 改成
+`0x41200000`(`float` 视图切过去看看 = 10.0)。
+再试试 `0x3F800000` = 1.0f —— **同一串字节,整数视图和浮点视图给出两个世界**。
+这就是内存面板里 int/float 视图切换的教学意义。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:写入指定 dword 后,字节视图前两个字节是什么。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 小端:LSB 在低地址(x86-64);大端相反(网络序)
+- 端序只在字节流↔多字节值转换时可见
+- 类型双关 + 端序 = 移植性双坑
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["endianness", "type-punning", "network-byte-order", "float-reinterpret"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段四:递归与栈帧生长(汇编版 factorial)。"

@@ -1,0 +1,58 @@
+# 习题:调试挑战(阶段三,8 题型 ⑥)
+
+[exercise]
+id = "stage03-q04-debug-challenge"
+type = "debug_challenge"
+title = "定位:想写 buf[0],数据却落在了别处"
+stage = 3
+lesson = "stage03-lesson01"
+knowledge = ["pointer", "indirect-addressing", "alignment-padding"]
+difficulty = 3
+related_experiment = "stage03-lesson01"
+
+hints.level1 = "程序运行后 buf 开头 4 字节没变,变化出现在 +8 处——检查写入指令的偏移。"
+hints.level2 = "写入用了 [rbx+8]:偏移 8 是错的,本意是 buf[0](偏移 0)。buf[0] 的实际值仍是 0x00。"
+answer_md = """
+程序本意:把 'A'(0x41)写进 buf 的第一个字节。
+
+实际行为:写进了 buf+8(偏移 8)——把"结构体第二个成员"的位置占了。
+这就是真实工程里"偏移算错"的形态:不报错,数据悄悄落在错的地方。
+
+修复:`mov byte [rbx], 0x41`(去掉 +8)。
+"""
+
+[quiz]
+display = """
+程序(可粘贴到工作台自行调试;buf 已 align 512):
+
+```asm
+[bits 64]
+org 0x400000
+global _start
+_start:
+    lea  rbx, [buf]
+    mov  byte [rbx+8], 0x41     ; ← 本意:写 buf 的第 0 字节!
+    mov  rax, 60
+    mov  edi, 0
+    syscall
+.balign 512
+buf: times 16 db 0
+```
+
+现象:运行后 buf 的 16 字节里,开头 4 字节仍是 00,而 **+8 处出现了 0x41**。
+"""
+
+[[quiz.questions]]
+key = "offset"
+prompt = "写入实际落点的偏移是多少(十进制)?"
+expect = "8"
+
+[[quiz.questions]]
+key = "buf0"
+prompt = "修复后(偏移改对),buf 的第一个字节的值应为?(hex)"
+expect = "0x41|41"
+
+[[quiz.questions]]
+key = "crash"
+prompt = "这类偏移错误在用户态会立刻崩溃吗?(答 会 或 不会)"
+expect = "不会|不会崩溃|no"

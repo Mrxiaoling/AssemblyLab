@@ -1,0 +1,122 @@
+# L3 — 阶段二:算术与标志位
+
+[lesson]
+id = "stage02-lesson02"
+title = "算术与标志位:CPU 怎么知道溢出了"
+stage = 2
+requires = ["stage02-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "整数溢出时 CPU 知道吗?有符号和无符号的区别到底在哪?"
+outcomes = ["读懂 CF/ZF/SF/OF", "用同一条 SUB 理解有符号/无符号两种视角", "会看条件跳转的依据"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    mov eax, 0x7FFFFFFF   ; INT32_MAX
+    add eax, 1            ; 有符号溢出!OF=1
+    mov [result1], rax
+    mov eax, 0
+    sub eax, 1            ; 无符号借位!CF=1,但 OF=0
+    mov [result2], rax
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+result1: dq 0
+result2: dq 0
+'''
+watch = ["RAX", "RFLAGS"]
+
+[[steps]]
+kind = "problem"
+title = "同一条指令,两种真相"
+content = """
+`0x7FFFFFFF + 1`:按**有符号**看是 INT32_MAX+1,溢出了;按**无符号**看是 0x80000000,没超界。
+CPU 执行的是同一条 `add`。它怎么同时服务两种语义?答案:标志位。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "逐步观察两个溢出"
+content = """
+单步执行实验:
+
+1. `add eax,1` 后:解释卡显示 **OF: 0 → 1**(有符号溢出),CF 保持 0(无符号没进位)。
+2. `sub eax,1`(0-1)后:**CF: 0 → 1**(无符号借位),OF 保持 0(有符号 -1 合法)。
+
+同一条指令,不同的标志位亮灯——这就是"两种视角"的硬件基础。
+"""
+
+[[steps]]
+kind = "theory"
+title = "四个核心标志"
+content = """
+| 标志 | 含义 | 谁在看它 |
+|---|---|---|
+| CF | 无符号进位/借位 | 无符号比较(JB/JA)、大数运算 |
+| OF | 有符号溢出 | 有符号比较(JL/JG) |
+| ZF | 结果为零 | 相等判断(JE/JNE) |
+| SF | 结果符号位 | 与 OF 组合出有符号比较 |
+
+条件跳转指令(Jcc)只是**查看这些标志位**再决定跳不跳。
+`jl`(有符号小于)= SF ≠ OF;`jb`(无符号小于)= CF = 1。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+C++ 有符号溢出是**未定义行为**,编译器敢做激进优化(假设它不发生);
+无符号溢出是**定义良好的回绕**。这就是为什么 `for (size_t i = n-1; i >= 0; i--)`
+这类代码要小心:无符号永远 >= 0。
+
+现实中:游戏刷分溢出、CVE 里的整数溢出漏洞,本质都是这一课的标志位没被检查。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "溢出会报错" —— CPU 只默默设置标志位;检查与否是程序员(和编译器)的事。
+- ❌ "CF 和 OF 是一回事" —— 你已亲眼看到:同一个操作,两者互不相干。
+- ❌ "INC 也影响 CF" —— INC/DEC 恰恰**不**影响 CF(为了循环计数方便),这是与 ADD 1 的区别。
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:构造三种边界"
+content = """
+修改源码,分别构造:(1) 结果恰为 0(看 ZF);(2) INT32_MIN-1(看 OF);
+(3) 0xFFFF...F + 1(看 CF 和 ZF)。每次先预测标志位组合,再单步验证。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "本课配套预测题(标志位三连)与补全题(绝对值),见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- ADD/SUB/CMP 按结果设置 CF/ZF/SF/OF。
+- 有符号溢出看 OF,无符号看 CF——同一条指令,两种解读。
+- 条件跳转 = 查表:Jcc 家族与标志位的对应关系。
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["flags-cf", "flags-of", "flags-zf", "add", "sub", "signed-unsigned"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段三(Phase 3 交付):内存与寻址——指针、数组、结构体。"

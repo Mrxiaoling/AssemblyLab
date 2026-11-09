@@ -1,0 +1,40 @@
+# 习题:补全寻址指令(阶段三)
+
+[exercise]
+id = "stage03-q02-fill-indexed"
+type = "fill_blank"
+title = "补全:让 int 数组求和写进内存"
+stage = 3
+lesson = "stage03-lesson02"
+knowledge = ["array", "index-scale", "memory-write"]
+difficulty = 3
+related_experiment = "stage03-lesson02"
+
+hints.level1 = "缺的是带下标寻址的加法:数组元素是 int,scale 是多少?"
+hints.level2 = "`add eax, [rbx+rcx*4]`(寄存器大小写均可)。"
+
+[fill_blank]
+hole_hint = "一条指令:eax += arr[i](rbx=数组首地址,rcx=i,元素为 int)"
+asm_template = '''
+[bits 64]
+org 0x400000
+lea rbx, [arr]
+xor ecx, ecx
+xor eax, eax
+.loop:
+cmp ecx, 5
+jge .done
+??
+inc ecx
+jmp .loop
+.done:
+mov [0x400100], rax
+mov rax, 60
+mov edi, 0
+syscall
+arr: dd 3, 7, 11, 5, 9
+'''
+
+[[fill_blank.testcases]]
+expect_exit_code = 0
+expect_mem = { addr = "0x400100", qword_le = "0x23" }

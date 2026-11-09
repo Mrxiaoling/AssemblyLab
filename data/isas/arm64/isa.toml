@@ -1,0 +1,295 @@
+# ARM64(AArch64)ISA 数据包 —— Phase 5
+# 汇编器:WSL aarch64-linux-gnu-as(GNU 语法);模拟器:Unicorn ARM64;反汇编:yaxpeax-arm
+
+[isa]
+id = "arm64"
+name = "ARM64 (AArch64)"
+endian = "little"
+emulator_arch = "unicorn:arm64"
+emulator_mode = "unicorn:arm"
+assembler = "gnu-as-aarch64"
+assembler_syntax = "gnu"
+stack_init = "0x7FF0000FF000"
+exit_sentinel = "0x4FFF00"
+pc_register = "PC"
+stack_register = "SP"
+flags_register = "NZCV"
+flags_init = 0
+link_register = "X30"
+panel_registers = ["X0", "X1", "X2", "X3", "X8", "X9", "X10", "X19", "X20", "X21", "X29", "X30", "SP", "PC", "NZCV"]
+
+[isa.syscall_stub]
+implemented = { "64" = "write", "93" = "exit" }
+note = "ARM64 Linux 桩:SVC #0,编号在 X8(write/exit);ret 到哨兵也可退出"
+
+[isa.memory_map]
+code = { base = "0x400000", size = 0x100000, name = "代码段(单 .text 扁平)" }
+stack = { base = "0x7FF000000000", size = 0x100000, name = "栈" }
+
+[[registers]]
+canonical = "X0"
+size = 64
+group = "参数/返回值"
+subregisters = [{ name = "W0", offset = 0, size = 32, write_semantics = "zero_extend_upper" }]
+role_notes = { aapcs64 = "第 1 参数 / 返回值" }
+
+[[registers]]
+canonical = "X1"
+size = 64
+group = "参数/返回值"
+subregisters = [{ name = "W1", offset = 0, size = 32, write_semantics = "zero_extend_upper" }]
+
+[[registers]]
+canonical = "X2"
+size = 64
+group = "参数/返回值"
+subregisters = [{ name = "W2", offset = 0, size = 32, write_semantics = "zero_extend_upper" }]
+
+[[registers]]
+canonical = "X3"
+size = 64
+group = "参数/返回值"
+subregisters = [{ name = "W3", offset = 0, size = 32, write_semantics = "zero_extend_upper" }]
+
+[[registers]]
+canonical = "X8"
+size = 64
+group = "临时"
+role_notes = { aapcs64 = "间接结果寄存器 / Linux syscall 编号" }
+
+[[registers]]
+canonical = "X9"
+size = 64
+group = "临时"
+
+[[registers]]
+canonical = "X10"
+size = 64
+group = "临时"
+
+[[registers]]
+canonical = "X19"
+size = 64
+group = "被调用者保存"
+role_notes = { aapcs64 = "callee-saved(等价 x86 RBX)" }
+
+[[registers]]
+canonical = "X20"
+size = 64
+group = "被调用者保存"
+
+[[registers]]
+canonical = "X21"
+size = 64
+group = "被调用者保存"
+
+[[registers]]
+canonical = "X29"
+size = 64
+group = "栈帧"
+role_notes = { aapcs64 = "FP 帧指针(等价 x86 RBP)" }
+
+[[registers]]
+canonical = "X30"
+size = 64
+group = "栈帧"
+role_notes = { aapcs64 = "LR 链接寄存器:bl 存返回地址,ret 跳回 X30(等价 x86 的 call 压栈 ret 弹栈)" }
+
+[[registers]]
+canonical = "SP"
+size = 64
+group = "栈帧"
+special = "stack_pointer"
+
+[[registers]]
+canonical = "PC"
+size = 64
+group = "状态"
+special = "program_counter"
+
+[[registers]]
+canonical = "NZCV"
+size = 64
+group = "状态"
+special = "flags"
+
+[[registers]]
+canonical = "V0"
+size = 128
+group = "NEON/浮点"
+role_notes = { neon = "128 位 SIMD/FP 寄存器(Q0 别名;B/H/S/D 为子视图)" }
+
+[[registers]]
+canonical = "V1"
+size = 128
+group = "NEON/浮点"
+
+[[flags]]
+name = "N"
+bit = 31
+semantics = "Negative:结果为负(有符号视角)"
+
+[[flags]]
+name = "Z"
+bit = 30
+semantics = "Zero:结果为零"
+
+[[flags]]
+name = "C"
+bit = 29
+semantics = "Carry:进位/借位(ARM 借位=无进位,与 x86 CF 语义相反!)" 
+
+[[flags]]
+name = "V"
+bit = 28
+semantics = "oVerflow:有符号溢出"
+
+[[abis]]
+id = "aapcs64"
+name = "AAPCS64(ARM64 Linux)"
+integer_arg_regs = [
+    { order = 1, reg = "X0" },
+    { order = 2, reg = "X1" },
+    { order = 3, reg = "X2" },
+    { order = 4, reg = "X3" },
+    { order = 5, reg = "X4" },
+    { order = 6, reg = "X5" },
+    { order = 7, reg = "X6" },
+    { order = 8, reg = "X7" },
+]
+return_reg = "X0"
+caller_saved = ["X0", "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17"]
+callee_saved = ["X19", "X20", "X21", "X22", "X23", "X24", "X25", "X26", "X27", "X28", "X29"]
+stack_alignment = 16
+red_zone = 0
+shadow_space = 0
+
+# 教学注释(GNU as 语法;与 x86 对比视角)
+[[instruction_notes]]
+mnemonic = "mov"
+category = "数据移动"
+summary = "寄存器/立即数搬运;立即数受编码限制(部分位模式),大常量用 ldr(伪指令)从字面池加载"
+pitfalls = ["mov x0, #0x123456789 大多不可编码,as 会报错或改写", "W 寄存器写入会把 X 上半清零"]
+related_cpp = "变量赋值"
+
+[[instruction_notes]]
+mnemonic = "movz"
+category = "数据移动"
+summary = "MOVZ/MOVK 组合构造 64 位大常量:MOVZ 写 16 位段并清其余,MOVK 保持其余段插入 16 位"
+
+[[instruction_notes]]
+mnemonic = "add"
+category = "算术"
+summary = "加法(不更新标志);adds 才更新 NZCV——与 x86 add 总是更新标志不同"
+pitfalls = ["需要标志时必须用 ADDS/SUBS", "目标寄存器可以是 SP 形式(sp 对齐运算)"]
+related_cpp = "整数加法"
+
+[[instruction_notes]]
+mnemonic = "adds"
+category = "算术"
+summary = "加法并按结果设置 NZCV(x86 add 的对应物)"
+
+[[instruction_notes]]
+mnemonic = "subs"
+category = "算术"
+summary = "减法并设置 NZCV。C 标志在借位时=0(ARM 定义'无借位=1'),与 x86 CF 相反"
+pitfalls = ["从 x86 直觉迁移最容易错的一点:cset 判断要用 HS/LO 而不是照搬 JA/JB"]
+
+[[instruction_notes]]
+mnemonic = "cmp"
+category = "比较"
+summary = "等价 subs 的置标志形式但不写目标寄存器(cmp x0, #10 ≡ subs xzr, x0, #10)"
+
+[[instruction_notes]]
+mnemonic = "cset"
+category = "比较"
+summary = "条件置 1:cset x0, eq ≡ Z=1 时 x0=1 否则 0;条件助记符 eq/ne/hs/lo/mi/pl/…"
+related_cpp = "布尔表达式求值"
+
+[[instruction_notes]]
+mnemonic = "b"
+category = "控制流"
+summary = "无条件跳转(等价 x86 jmp);b.cond 条件跳转(如 b.eq/b.lt)"
+
+[[instruction_notes]]
+mnemonic = "bl"
+category = "控制流"
+summary = "调用:返回地址写入 X30(LR),不压栈!(x86 的 call 压栈——两种 ABI 最大差异之一)"
+pitfalls = ["被调方若再调别人必须先保存 X30(通常 stp x29, x30, [sp, #-16]!)", "ret 只信 X30"]
+related_cpp = "函数调用"
+
+[[instruction_notes]]
+mnemonic = "ret"
+category = "控制流"
+summary = "跳转到 X30(默认);不是弹栈!与 x86 ret 语义不同"
+pitfalls = ["ret 可带寄存器参数 ret x5", "X30 未保存就嵌套调用会跳飞"]
+
+[[instruction_notes]]
+mnemonic = "ldr"
+category = "内存"
+summary = "读内存:ldr x0, [x1](等价 x86 mov rax,[rbx]);ldr x0,[x1,#8] 带偏移;= 伪指令读字面池"
+pitfalls = ["ARM64 无'一条指令内嵌 64 位大立即数',字面池是常态"]
+
+[[instruction_notes]]
+mnemonic = "str"
+category = "内存"
+summary = "写内存:str x0, [x1];str q0, [x1] 写 128 位 NEON 向量"
+
+[[instruction_notes]]
+mnemonic = "stp"
+category = "内存"
+summary = "双寄存器连续存储:stp x29, x30, [sp, #-16]! 是函数序言惯用(存帧指针+LR,前索引减栈)"
+pitfalls = ["! 是写回:SP 自动更新", "对齐要求 16 字节"]
+
+[[instruction_notes]]
+mnemonic = "ldp"
+category = "内存"
+summary = "双寄存器连续读取:ldp x29, x30, [sp], #16 是函数尾声(后索引加栈)"
+
+[[instruction_notes]]
+mnemonic = "svc"
+category = "系统"
+summary = " Supervisor Call:陷入内核;Linux arm64 约定编号在 X8(write=64, exit=93),参数 X0-X2"
+
+[[instruction_notes]]
+mnemonic = "movi"
+category = "NEON"
+summary = "向量立即数:movi v0.2d, #1 把两个 64 位 lane 置 1;lane 形式 .2d/.4s/.16b 决定切分"
+
+[[instruction_notes]]
+mnemonic = "add"
+category = "NEON(向量)"
+summary = "add v1.4s, v0.4s, v2.4s = 4 个 32 位 lane 同时相加(SIMD);与标量 add 同 mnemonic 靠后缀区分"
+related_cpp = "SIMD 向量化循环"
+
+[[instruction_notes]]
+mnemonic = "ldaxr"
+category = "原子"
+summary = "独占读(带获取语义):标记 CPU 独占监视器;与 stlxr 配对实现 LL/SC 原子操作"
+pitfalls = ["ldaxr 后不能隔太多指令(独占可能被清)", "w 变体 32 位,x 变体 64 位"]
+related_cpp = "atomic.load/acquire"
+
+[[instruction_notes]]
+mnemonic = "stlxr"
+category = "原子"
+summary = "独占写(带释放语义):状态寄存器(0=成功)在前,如 stlxr w3, x4, [x2]——w3=0 表示独占成功"
+pitfalls = ["失败(非 0)要循环重试——这就是自旋锁的内核", "顺序:状态寄存器, 值, [地址]"]
+related_cpp = "atomic.store/release"
+
+[[instruction_notes]]
+mnemonic = "dmb"
+category = "原子"
+summary = "数据内存屏障(ARM64 弱内存模型的灵魂):dmb ish = 内核共享域全屏障"
+pitfalls = ["x86 强模型几乎不用显式屏障;ARM64 无屏障 = 竞态随时发生", "还有 dsb/isb 各管别的"]
+related_cpp = "atomic_thread_fence"
+
+[[instruction_notes]]
+mnemonic = "adr"
+category = "取址"
+summary = "PC 相对取地址(±1MB):adr x2, label——教学沙箱取数据地址的标准做法"
+pitfalls = ["不要用 ldr x2, =label:字面池存绝对地址,as 会留重定位,objcopy 扁平二进制不应用它 → 读出 0"]
+
+[[instruction_notes]]
+mnemonic = "cbnz"
+category = "控制流"
+summary = "比较并跳转:cbnz w3, loop = w3≠0 则跳;cbz 为零则跳——不用碰标志位"

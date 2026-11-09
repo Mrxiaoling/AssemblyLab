@@ -1,0 +1,180 @@
+# L8.2 — 阶段八:用户态上下文切换原型(OS 与并发 ②)
+
+[lesson]
+id = "stage08-lesson02"
+title = "swapctx:一次上下文切换 = 换栈指针 + 恢复寄存器"
+stage = 8
+requires = ["stage04-lesson02", "stage08-lesson01"]
+estimated_minutes = 50
+
+[lesson.goal]
+problem = "线程/协程的'切换执行流',在 CPU 层面到底是个什么操作?"
+outcomes = ["亲手实现 swapctx(保存现场→换栈→恢复现场)", "看清'现场'在内存里的形态", "理解协程/线程切换的机器本质"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "x86-64"
+source = '''[bits 64]
+org 0x400000
+global _start
+
+; swapctx(from, to):
+;   1) push 六个 callee-saved 寄存器(此刻栈顶正是"返回地址")
+;   2) 把换完的栈顶存进 from —— 它就是 A 的完整现场
+;   3) 从 to 恢复栈顶 → pop 六个 → ret 弹出"返回地址"
+;   现场 = 栈指针 + 一串寄存器;切换 = 换 rsp
+swapctx:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov [rdi], rsp          ; 保存 A 的现场(rsp 含返回地址)
+    mov rsp, [rsi]          ; 换成 B 的现场
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret                     ; 弹出的是 B 的"入口"!
+
+_start:
+    lea rdi, [ctx_a]
+    lea rsi, [ctx_b]
+    call swapctx            ; A → B(B 尚未运行过,走预置现场)
+    ; 从 B 切回来后,从这里继续
+    mov edi, [counter_b]    ; B 跑过没有?counter=1
+    mov rax, 60
+    syscall                 ; exit(counter_b)
+
+task_b:                     ; B 的入口(ret 落到这里)
+    mov dword [counter_b], 1
+    lea rdi, [ctx_b]
+    lea rsi, [ctx_a]
+    call swapctx            ; B → A(恢复 A 的现场)
+    ud2                     ; 不该回到这里
+
+align 512
+ctx_a: dq 0                 ; A 的现场保存区(切换后存 rsp)
+ctx_b: dq b_stack           ; B 的预置"现场":rsp
+b_stack:                    ; B 的假栈(从低到高被 pop)
+    dq 0, 0, 0, 0, 0, 0     ; r15..rbp 占位(没人检查)
+    dq task_b               ; ret 弹出 → 跳到 B 的入口
+counter_b: dd 0
+'''
+watch = ["RSP", "RDI", "RSI"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+内核线程切换、协程 resume、async 框架的调度——底层都是同一个动作:
+**把当前 CPU 寄存器存起来,把目标的寄存器装回去,换栈**。
+
+本节在用户态手写这个动作(约 14 条指令),切换 A/B 两个"任务"各跑一段,
+再看一次"现场"在内存里长什么样。不进内核——所以这同时就是**协程库的全部机制**。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:跑通一次来回"
+content = """
+点「打开本课实验」→ 直接「运行」→ 输出面板无内容但程序**正常退出**。
+哪里证明 B 跑过?看退出码:程序 exit(counter_b) = 1(B 写的)。
+再 Reset 单步,盯 RSP 和「轨迹」面板。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "切换瞬间逐条拆"
+content = """
+`call swapctx` 后(A 栈顶 = call 的下一条地址):
+1. 六条 push:把 rbp/rbx/r12-r15 压进 A 的栈——**寄存器现场上栈**
+2. `mov [rdi], rsp`:此刻的 rsp 覆盖了 A 的返回地址+六个寄存器——**一个指针就是 A 的全部现场**
+3. `mov rsp, [rsi]`:**瞬移**到 B 的假栈
+4. 六条 pop:把占位值装回寄存器(B 从没跑过,装什么都行)
+5. `ret`:弹出 task_b —— **A 的"下一条指令"被换成了 B 的入口**
+
+单步走到第 3 条前后,RSP 从 A 栈(0x7FF0…FFxx)跳到 B 假栈(0x4002xx 数据区)——
+这就是"切换"的全部体感:一个寄存器的值变了。
+"""
+
+[[steps]]
+kind = "state"
+title = "回到 A:对称恢复"
+content = """
+task_b 里 B 自己 call swapctx(b→a):
+B 的现场(含 B 的返回地址)存进 ctx_b,A 的现场从 ctx_a 恢复——
+pop 六个寄存器、ret 弹出 **A 当初 call swapctx 的下一条**(`mov edi, [counter_b]`)。
+
+在内存面板输入 ctx_a 的地址(0x400200),uint64 视图:
+第一个 qword = A 的 rsp;顺着它跳到 A 栈,能看到当年 push 的六个值和返回地址。
+**现场是可检查的普通内存**——这不是魔法,是数据结构。
+"""
+
+[[steps]]
+kind = "theory"
+title = "切换要素清单(通用公式)"
+content = """
+任何切换(协程/线程/进程)都逃不出三件事:
+1. **保存现场**:callee-saved 寄存器 + 栈指针(必要时 FP/向量寄存器)
+2. **换栈指针**:地址空间是否一起换,决定了它是协程切换还是线程/进程切换
+3. **恢复现场**:目标任务的寄存器装回,ret/跳转续跑
+
+差异只在:谁来做(用户函数 vs 内核调度器)、换不换页表、要不要陷入内核。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- 阶段七的协程:resume() = call [__resume_fn],帧里存的是"半个现场"
+  (协程只有自己需要的部分+编译器决定的内容);本节 swapctx 存**全套**通用寄存器
+- ucontext 库的 getcontext/setcontext、boost.context、Go runtime 的 gosched——
+  内核全是本节这十几条指令的工程化版本(加对齐、信号掩码、浮点状态)
+- 线程切换 = 本节 + 陷入内核 + 调度决策 + (可能)换地址空间——第九课辨析
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "切换要保存全部寄存器" —— caller-saved 在调用约定里已被调用者保存;只存 callee-saved+栈
+- ❌ "切换指令很神秘" —— 就是 mov rsp + 几条 pop;任何函数都能干
+- ❌ "B 的假栈和真栈不同" —— 完全一样;它第一次被切换到时看起来就像"刚从某处返回"
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:B 再切一次给自己"
+content = """
+在 task_b 的 swapctx 前**再插入一次** switch(比如切到 ctx_b 自身预置的第二个现场,
+或再复制一个 ctx_c):体会"现场可嵌套"——每次切换都在内存里留下一个完整的暂停点。
+这就是调度器里"任务队列"的本质:一堆保存好的 rsp。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:交换次数与退出码的关系。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- swapctx 十几条指令:push 现场 → 存 rsp → 换 rsp → pop → ret
+- 现场 = 栈指针 + callee-saved;B 的"从未运行"现场可以手工构造
+- 协程切换 = 用户态本节;线程/进程切换 = +内核 +调度 +(可能)换地址空间
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["context-switch", "callee-saved", "swapcontext", "scheduler-queue"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "四类切换辨析:函数/用户协程/线程/内核切换,一张表看清。"

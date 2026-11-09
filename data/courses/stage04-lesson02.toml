@@ -1,0 +1,161 @@
+# L4.2 — 阶段四:递归与栈帧(栈的深层认识)
+
+[lesson]
+id = "stage04-lesson02"
+title = "递归与栈帧:看 RSP 一层层长上去"
+stage = 4
+requires = ["stage04-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "factorial(5) 的五层嵌套调用,栈上到底发生了什么?"
+outcomes = ["亲眼看到递归时栈帧的生长与回收", "理解基例与递归步的机器形态", "破除'递归很神秘'的错觉"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    mov edi, 5          ; n = 5
+    call fact           ; eax = 120
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+; fact: edi 传入 n,eax 返回 n!
+fact:
+    cmp edi, 1
+    jle .base           ; n <= 1 → 基例
+    push rdi            ; 保存本层 n(这就是"栈帧"的成员)
+    dec edi             ; n-1
+    call fact           ; 递归
+    pop rdi             ; 恢复本层 n
+    imul eax, edi       ; eax *= n
+    ret
+.base:
+    mov eax, 1
+    ret
+'''
+watch = ["RAX", "RDI", "RSP"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+上一课你见过**一层**调用:call 压返回地址,ret 弹回。
+递归 = 同一个函数**在返回前再次调用自己**——栈会怎样?
+
+猜一猜:fact(5) 全程 RSP 最低降到哪?(每层压 8 字节返回地址 + 8 字节 rdi)
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:先运行,再重放"
+content = """
+点「打开本课实验」:
+1. 直接「运行」→ 程序正常退出,RAX 路过 0x78(120)
+2. Reset,改用「单步」逐条走——这次盯住 **RSP** 和「轨迹」面板
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "下降段:五层栈帧的生长"
+content = """
+从 `call fact` 开始连续单步,注意节奏:
+
+```
+call fact   → RSP −8(压返回地址)
+push rdi    → RSP −8(保存本层 n=5)
+call fact   → RSP −8 …(第 2 层)
+push rdi    → RSP −8(保存 n=4)
+…
+```
+
+下降到底时 RSP 总共降了 **2×5 = 16 字节 × 4 次递归 + 初始 call**:
+每一层都留下「返回地址 + 本层 n」的完整记录。
+`push rdi` 就是这一层的"栈帧变量"——五层互不干扰,因为各自有各自的栈位置。
+"""
+
+[[steps]]
+kind = "state"
+title = "基例:递归的刹车"
+content = """
+`cmp edi,1 / jle .base`:RDI 一路 5→4→3→2→1,
+第 5 层不再递归,`mov eax,1; ret` 直接返回。
+**没有基例 = 没有刹车**——栈会一直长,直到撞上这颗 CPU 的栈区尽头
+(在我们的模拟器里是 1MB 栈区;真实系统是 stack overflow 杀进程)。
+"""
+
+[[steps]]
+kind = "theory"
+title = "上升段:一层层收回"
+content = """
+基例 ret 后,控制流回到第 4 层 `call fact` 的下一条 `pop rdi`:
+
+```
+pop rdi        → 恢复本层 n(4)
+imul eax, edi  → 1×4 = 4
+ret            → 回第 3 层
+pop rdi        → n=3 → 4×3=12 → ret
+…              → 12×2=24 → 24×5=120
+```
+
+RSP 每层 +16,精确对称地收回下降段铺开的一切。
+**递归的机器本质:同一份代码 × 不同栈位置的多次执行**——没有任何新机制。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
+```
+g++ -O0 的产物与我们手写几乎一致;**-O2 会把整个递归改写成循环乘法**
+(尾调用优化 + 强度削减)——打开「优化对比」页,把这份 C++ 粘进去试试。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "递归调用会复制函数代码" —— 代码只有一份,复制的是栈上的数据
+- ❌ "call fact 会重新初始化 edi" —— 上一层的 edi 会被 push 保护,但传参要自己 mov
+- ❌ "栈不会满" —— 深递归的 stack overflow 是真实工程事故(默认栈仅 1-8MB)
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:观察栈内存"
+content = """
+单步下降 2-3 层后暂停,内存面板点「RSP」跳到栈顶,
+用 **uint64 视图**:能看到压入的 n(5、4…)和返回地址交错排列。
+再对照上升段:这些值被逐个 pop 消费。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:fact(4) 运行结束时的 EAX;以及最深递归处的 RSP 与初始 RSP 的差。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 递归 = 栈帧链;下降压栈,上升弹栈,完全对称
+- 每层帧:返回地址 + 本层局部/保存值
+- 基例缺失 → 栈耗尽;编译器优化可消递归
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["recursion", "stack-frame", "call-ret", "tail-call", "stack-overflow"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段五:-O0 到 -O3,看编译器如何把这份递归改写成循环。"

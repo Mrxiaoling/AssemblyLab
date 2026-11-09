@@ -1,0 +1,168 @@
+# L7.3 — 阶段七:挂起与恢复的全景(C++20 协程 ③)
+
+[lesson]
+id = "stage07-lesson03"
+title = "局部变量为什么能穿越挂起点?帧的生与死"
+stage = 7
+requires = ["stage07-lesson02"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "挂起时栈已经展开,局部变量去哪了?resume() 之后资源如何释放?"
+outcomes = ["用帧内存视图证明局部变量存进帧", "追踪帧的释放路径(final_suspend + destroy)", "读完一次完整协程生命周期"]
+
+[lesson.experiment]
+mode = "debug"
+compiler = "clang++"
+isa = "x86-64"
+source = '''#include <coroutine>
+#include <cstdio>
+#include <exception>
+
+struct Task {
+    struct promise_type {
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+    std::coroutine_handle<> h;
+    void resume() { h.resume(); }
+    ~Task() { if (h) { h.destroy(); std::printf("  [frame destroyed]\\n"); } }
+};
+
+Task foo(int seed) {
+    int warm = seed + 1;
+    int big = seed * 100;
+    co_await std::suspend_always{};      // ← warm/big 在此"穿越"
+    std::printf("resumed: warm=%d big=%d\\n", warm, big);
+    co_return;                            // 触发 final_suspend
+}
+
+int main() {
+    {
+        Task t = foo(41);
+        std::printf("before resume\\n");
+        t.resume();
+        std::printf("after resume\\n");
+    }                                     // t 析构 → handle.destroy() → 帧释放
+    std::printf("main end\\n");
+    return 0;
+}
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+观察点 6-10(README 第七节):
+6. 挂起时保存了哪些状态?
+7. 恢复时如何找到下一条逻辑?
+8. 局部变量为什么可以跨越挂起点?
+9. resume() 最终做了什么?
+10. 协程结束后如何释放资源?
+
+一个带析构打印的 Task 把整条生命周期串起来。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:时间线 + 帧内存"
+content = """
+点「打开本课实验」→ 启动调试 → 断在第一个 `co_await` 行 → 「▶ 继续」。
+「协程」页签「录制时间线」:看到挂起站、resume 站与最后的释放。
+对每个带帧的站点,把帧地址填进「内存」页签用 **uint64 视图** 直接看字节:
+resume_fn / destroy_fn / index / warm / big 依次躺在帧里。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "观察点 8:局部变量穿越挂起点"
+content = """
+普通函数挂起=栈帧销毁,局部变量灰飞烟灭。
+协程的差别:**warm/big 的"家"不在栈帧,而在协程帧里**。
+
+证据:帧字段列表里有 `warm`、`big`(clang 在 -O0 把跨挂起点的变量都提升进帧);
+反汇编里对它们的访问是 `[帧地址+偏移]` 而非 `[rsp-偏移]`。
+挂起展开栈时,这些值安然待在堆/帧内——恢复后照常读取。
+"""
+
+[[steps]]
+kind = "state"
+title = "观察点 7+9:恢复如何找到下一步"
+content = """
+`__coro_index` 是路标:挂起前写入"下一个状态编号";
+`__resume_fn` 的开头是一张**按 index 的跳转表**(反汇编里是一串
+`cmp / je / jmp` 或跳转表)。`t.resume()` 的最终机器动作 =
+`call [帧里的 __resume_fn]`——就是一次普通间接调用!
+没有线程、没有调度器、没有系统调用;协程是**用户态的纯函数调用**。
+"""
+
+[[steps]]
+kind = "theory"
+title = "观察点 10:帧的释放路径"
+content = """
+本例的释放链:`main` 作用域结束 → `~Task()` → `handle.destroy()` →
+`call [帧里的 __destroy_fn]` → 析构帧内对象(promise、跨挂起点变量)→ `operator delete` 释放帧。
+
+释放时机由**句柄拥有者**决定:
+- `final_suspend` 挂起后若 `await_suspend` 返回 handle 让调用方 destroy → 半自动
+- 标准库 `std::jthread` 风格 RAII(本例 ~Task)最稳
+- **destroy 后再 resume = 未定义行为**——悬挂句柄是协程版 use-after-free
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `std::generator` / 自写 Task 的析构策略就是本节的 ~Task
+- 挂起点两侧的资源:栈上 RAII 对象(如 lock_guard)**不能**跨挂起点——栈已展开;
+  需要跨挂起点的资源必须放进帧(直接作为局部变量被提升,或存进智能指针成员)
+- co_return → promise.return_void() → final_suspend() → (通常)保持挂起等待 destroy
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "协程结束帧自动释放" —— final_suspend 挂起后帧仍在,等 destroy
+- ❌ "所有局部变量都进帧" —— 只有**跨挂起点存活的**才被提升;纯挂起点前的临时仍在栈上
+- ❌ "resume 可以并发调用" —— 协程不是线程安全对象;并发 resume 是数据竞争
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:观察帧的消失"
+content = """
+录制时间线后,记下最后一站的帧地址;在「内存」页签查看该地址。
+单步过 `h.destroy()`(或把断点设在 ~Task 的 destroy 调用),再看同一地址——
+内容被 operator delete 归还后变为垃圾/0。**帧的一生,亲眼可见。**
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:main 作用域加花括号/去掉花括号时,帧释放时机与输出顺序差异。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 跨挂起点变量被提升进帧;访问变为 [帧+偏移]
+- resume = call [__resume_fn],按 __coro_index 跳转表续跑
+- 帧释放 = handle.destroy() → 析构帧内对象 → 释放内存;时机由句柄拥有者定
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["coroutine-lifetime", "frame-promotion", "handle-destroy", "raii-across-suspend"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段八:syscall 之旅与真正的上下文切换(内核级)。"

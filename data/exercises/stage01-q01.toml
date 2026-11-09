@@ -1,0 +1,40 @@
+# 习题:预测执行结果(阶段一)
+
+[exercise]
+id = "stage01-q01-predict-add"
+type = "predict"
+title = "预测:三步之后 RAX 是多少?"
+stage = 1
+lesson = "stage01-lesson01"
+knowledge = ["mov", "add", "registers"]
+difficulty = 1
+related_experiment = "stage01-lesson01"
+
+hints.level1 = "逐条跟踪:先 mov 后 add,注意最终还有一条 sub。"
+hints.level2 = "RAX 经历 10 → 30 → 25;0x19 就是 25 的十六进制。"
+answer_md = """
+`mov eax,10` → RAX=10;`mov ebx,20`;`add rax,rbx` → RAX=30;`sub eax,5` → RAX=**0x19(25)**。
+RBX 保持 20(0x14)。`sub` 会设置标志位:结果非零 → ZF=0。
+"""
+common_mistakes = ["把 sub 当成对 RBX 操作", "忘记 0x19 = 25"]
+
+[predict]
+exec = "step:4"
+asm = '''
+[bits 64]
+org 0x400000
+mov eax, 10
+mov ebx, 20
+add rax, rbx
+sub eax, 5
+'''
+
+[[predict.questions]]
+key = "RAX"
+prompt = "RAX 最终值(十六进制,如 0x19)"
+expect_kind = "reg"
+
+[[predict.questions]]
+key = "RBX"
+prompt = "RBX 最终值(十六进制)"
+expect_kind = "reg"

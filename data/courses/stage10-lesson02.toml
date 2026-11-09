@@ -1,0 +1,161 @@
+# L10.2 — 阶段十:ARM64 函数调用与栈帧(ARM 与嵌入式 ②)
+
+[lesson]
+id = "stage10-lesson02"
+title = "bl/ret 与 X30:返回地址不在栈上的世界"
+stage = 10
+requires = ["stage10-lesson01", "stage04-lesson02"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "ARM64 的 bl 不压栈,那递归怎么不互相踩?栈帧长什么样?"
+outcomes = ["掌握 stp/ldp 帧惯例", "理解 LR 的保存-恢复链条", "用模拟器逐帧观察 ARM64 递归"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "arm64"
+source = '''// ARM64 递归 factorial:n 在 X0,返回值 X0
+// 每层:stp 保存 FP/LR → 递归 → ldp 恢复 → ret
+.global _start
+_start:
+    mov     x0, #5
+    bl      fact
+    mov     x19, x0             // 存结果(X19 是 callee-saved,不用怕)
+    mov     x0, x19
+    mov     x8, #93             // Linux arm64:exit(0)——真机程序靠 svc 退出,
+    mov     x0, #0              // bl 的返回地址(X30)已消费完,ret 会跳回去
+    svc     #0
+
+fact:
+    cmp     x0, #1
+    b.le    base
+    stp     x29, x30, [sp, #-16]!   // 序言:保存 FP+LR,SP-=16
+    mov     x29, sp
+    stp     x0, xzr, [sp, #-16]!    // 保存本层 n
+    sub     x0, x0, #1
+    bl      fact
+    ldp     x1, xzr, [sp], #16      // 取回 n
+    mul     x0, x0, x1
+    ldp     x29, x30, [sp], #16     // 尾声:恢复 FP+LR,SP+=16
+    ret
+base:
+    mov     x0, #1
+    ret
+'''
+watch = ["X0", "X30", "SP"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+阶段四你在 x86 上看过递归:每层 call 压 8 字节返回地址。
+ARM64 的 bl **不碰栈**——返回地址进了 X30 寄存器。
+那 fact 里再 bl 一次,X30 被覆盖,回不去了?——所以先 stp 存进栈。
+本节把这条"LR 保存链"逐帧看穿。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:五层递归"
+content = """
+点「打开本课实验」(ARM64 工作台)。先「运行」确认 X0 = 0x78(120),
+再 Reset 单步,盯 **X30 与 SP** 的节拍。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "序言:stp x29, x30, [sp, #-16]!"
+content = """
+每层 fact 的开头:
+1. `stp x29, x30, [sp, #-16]!` —— FP+LR 双双压栈(16 字节一次搞定,SP 写回)
+2. `mov x29, sp` —— 建帧指针
+3. `stp x0, xzr, [sp, #-16]!` —— 保存本层参数 n(xzr 是恒零寄存器,占位凑对齐)
+
+单步下降 3 层:SP 每层 -32;X30 每层存的都是"本层 bl fact 的下一条地址"。
+对比 x86:那里 call 自动压栈;这里**保存是软件的责任**——编译器/手写都一样。
+"""
+
+[[steps]]
+kind = "state"
+title = "尾声:ldp 与对称回收"
+content = """
+基例 x0=1 返回后,每层:
+1. `ldp x1, xzr, [sp], #16` —— 取回本层 n,SP+16
+2. `mul x0, x0, x1` —— 乘
+3. `ldp x29, x30, [sp], #16` —— 恢复 FP+LR,SP+16
+4. `ret` —— 跳 X30(现在指向本层的调用者)
+
+SP 每层 +32,精确对称。内存面板跳 RSP(即 ARM64 的 SP 位置):
+栈里 X30/X29/n 交错可见——和 x86 的帧一样有形,只是**返回地址的进出方式不同**。
+
+注意 main 尾部用 `svc #0`(exit 系统调用)而不是 ret:
+`bl fact` 的返回地址已消费,此时 X30 指向 main 自己中间某条——
+**只有"未调用过别人"的叶函数才能直接 ret 回哨兵**。
+"""
+
+[[steps]]
+kind = "theory"
+title = "为什么 ARM 选择 LR 而不是压栈"
+content = """
+- **叶函数(不再调用别人)零栈开销**:LR 直接 ret,一个字节栈都不用——
+  嵌入式友好(这也是 Cortex-M 及嵌入式 ABI 的设计取向)
+- 非叶函数:必须 stp/ldp 保存 LR,总开销与 x86 相当
+- 代价:每层"可能会调用"的函数都要写保存代码;x86 的 call 自动化在这里变成显式约定
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+在「优化对比」页分别用 g++ 与 aarch64-linux-gnu-g++ 编译:
+
+```cpp
+int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
+```
+
+x86 -O0:`call fact` + `push/mov rbp,rsp` 序言;
+ARM64 -O0:`bl fact` + `stp x29, x30, [sp,#-32]!`(还顺带存了 x0)。
+语义一致,机制两样——但 C++ 程序员不需要知道,这就是 ABI 的意义。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "ret = 弹栈" —— ARM64 ret 只读 X30;栈是你自己管理的数据区
+- ❌ "叶函数也必须保存 LR" —— 不用;这就是 LR 设计的收益
+- ❌ "xzr 是特殊变量" —— 它是恒零读寄存器(写它丢弃),常用来凑 16 字节对齐
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:故意不保存 LR"
+content = """
+把 fact 里的 `stp x29, x30, [sp, #-16]!` 注释掉(连同对应 ldp)再跑:
+递归第二次 bl 覆盖 X30,第一次 ret 飞到错误地址——
+模拟器会报"取指未映射"之类的 Fault。**这就是 LR 不保存的真实代价。**
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:fact(3) 时最深递归处的 SP 与初始 SP 的差。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- bl 写 X30 不压栈;非叶函数序言 stp x29,x30 保存
+- 帧惯例:stp x29,x30 → mov x29,sp → … → ldp x29,x30 → ret
+- 叶函数零栈开销是 LR 设计的嵌入式动机
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["link-register", "stp-ldp", "aapcs64", "recursion"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "同一功能 x86-64 与 ARM64 对比:逐指令并肩看。"

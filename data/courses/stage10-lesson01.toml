@@ -1,0 +1,145 @@
+# L10.1 — 阶段十:AArch64 基础(ARM 与嵌入式 ①)
+
+[lesson]
+id = "stage10-lesson01"
+title = "AArch64 寄存器体系:从 RAX 到 X0 的迁移"
+stage = 10
+requires = ["stage03-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "换了 ARM64,寄存器、指令、内存访问全变样——怎么快速建立新直觉?"
+outcomes = ["掌握 X/W 寄存器关系与 AAPCS64 基本命名", "用 GNU as 语法写最小 ARM64 程序", "NEON 128 位读写的第一印象"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "arm64"
+source = '''// ARM64(GNU 语法)。工作台右上可切换 ISA。
+// ret 跳 X30(已预置为终止哨兵)= 程序结束
+.global _start
+_start:
+    mov     x0, #21
+    mov     x1, #2
+    add     x2, x0, x1, lsl #1      // x2 = 21 + (2<<1) = 25
+    mov     w3, #100                // W3 写入会清零 X3 上半!
+    adds    x4, x2, x3              // 125;adds 才置标志
+    str     x4, [sp, #-16]!         // 压栈存储(前索引写回)
+    ldr     x5, [sp], #16           // 读回(后索引写回)
+    mov     x0, x5
+    ret
+'''
+watch = ["X0", "X2", "X4", "SP"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+x86-64:RAX/RBX/RSP/RBP,RIP 决定下一条,标志叫 RFLAGS。
+ARM64:全是 X0-X30,PC 不可当通用寄存器用,标志只有 4 位(NZCV),
+**连"调用把返回地址存哪"都不一样**。本节用同平台真实模拟器(Unicorn ARM64)
+把最基本的一套跑通。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:切换到 ARM64 工作台"
+content = """
+点「打开本课实验」——工作台以 **ARM64 + GNU as** 打开(ISA 切换器已置 ARM64)。
+单步走一遍:寄存器面板是 X 系列,反汇编是 yaxpeax 解码的 ARM64 定长 4 字节指令。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "X/W 关系与移位操作数"
+content = """
+- `mov w3, #100`:W 寄存器 = X 寄存器的低 32 位;**写 W3 会把 X3 上半清零**
+  (与 x86 写 32 位寄存器清上半一致,但 ARM64 的 8/16 位写入是保留上半——查 ISA 包)
+- `add x2, x0, x1, lsl #1`:**操作数自带移位**!一条指令完成 x0 + (x1<<1)。
+  x86 需要 lea 才能这么干;ARM64 的普通算术指令天生支持
+- `adds`:ARM64 的 add **不置标志**,要标志必须用 adds/subs——
+  从 x86 迁移最常踩的坑
+"""
+
+[[steps]]
+kind = "state"
+title = "栈:stp/ldr 与写回"
+content = """
+`str x4, [sp, #-16]!`:把 x4 存到 sp-16,并**写回** sp(sp -= 16)——`!` 是前索引写回。
+`ldr x5, [sp], #16`:先按 sp 读,再 sp += 16——后索引写回。
+单步盯 SP:两次操作的 16 字节对齐是 AAPCS64 硬性要求(SP 必须 16 字节对齐)。
+"""
+
+[[steps]]
+kind = "theory"
+title = "AAPCS64 速览(对照 SysV)"
+content = """
+| 事项 | x86-64 SysV | ARM64 AAPCS64 |
+|---|---|---|
+| 参数 | RDI,RSI,RDX,RCX,R8,R9 | **X0-X7**(8 个) |
+| 返回值 | RAX | X0 |
+| 调用保存返回地址 | call 压栈 | **bl 写入 X30(LR)** |
+| 帧指针 | RBP(习惯) | X29(FP) |
+| 被调用方保存 | RBX,RBP,R12-R15 | X19-X28 |
+| 栈对齐 | 16 字节 | 16 字节 |
+| 标志 | CF/PF/AF/ZF/SF/OF/DF | **NZCV 4 位** |
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+在「优化对比」页把编译器切到 **aarch64-linux-gnu-g++** 编译同一个 square 函数:
+ARM64 的 -O2 是 `mul w0, w0, w0; ret`——参数在 W0(标量 int 用 W 视图),返回在 W0。
+同一份 C++,两个世界,语义一致。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "add 和 x86 一样置标志" —— 必须 adds/subs
+- ❌ "bl 像一样压栈" —— 返回地址进 X30;嵌套调用前必须保存它
+- ❌ "ret 会弹栈" —— ret 跳 X30,栈动不动看你自己的 prologue/epilogue
+- ❌ "写 W 寄存器保留上半" —— 写 W 清零上半;读 W 只看低 32
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:NEON 128 位初体验"
+content = """
+把源码末尾(ret 前)插入:
+
+```
+    movi    v0.2d, #1           // 两个 64 位 lane = 1
+    add     v1.2d, v0, v0       // 128 位 SIMD 加
+    str     q1, [sp, #-16]!     // 128 位写内存
+```
+
+单步后内存面板跳 RSP,uint64 视图:`02 00…00 02 00…00`——
+**两个 lane 各自加成 2**,128 位字节完整躺在内存里。SIMD 不是黑魔法,就是宽寄存器+lane。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:adds 后 X4 与 NZCV。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- X/W 同体不同视图;写 W 清上半
+- 算术要标志用 adds/subs;操作数自带移位
+- str/ldr 前后索引写回;SP 16 字节对齐
+- bl→X30,ret 跳 X30;NEON = 128 位 lane 运算
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["aarch64-registers", "aapcs64", "neon-basics", "prepost-index"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "ARM64 的函数调用与栈帧:bl/ret 与 x86 的压栈世界对比。"

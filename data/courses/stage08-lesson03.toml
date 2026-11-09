@@ -1,0 +1,149 @@
+# L8.3 — 阶段八:四类切换辨析(OS 与并发 ③)
+
+[lesson]
+id = "stage08-lesson03"
+title = "函数/协程/线程/内核:四次'换执行流'的对照"
+stage = 8
+requires = ["stage08-lesson02", "stage07-lesson03", "stage08-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "call、resume()、线程调度、syscall——都是'换一段执行流',差在哪?"
+outcomes = ["用保存了什么/谁来做/切不切地址空间三轴区分四类切换", "把前七阶段实验串成一张地图", "看到 async/await 与线程切换的成本差在何处"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "x86-64"
+source = '''[bits 64]
+org 0x400000
+global _start
+
+; 微实验:同一功能(计数到 N)的三种"流"形态并排
+; ① 函数调用:call inc_by
+; ② 手工切换:swapctx 原型(见阶段八第二课)
+; ③ syscall 计数(内核视角的时间片感):write 输出统计
+_start:
+    mov     edi, 5
+    call inc_by             ; ① 函数调用:同栈,仅压返回地址
+    ; ② 用户切换 = 阶段八第二课 swapctx(现场在内存,换 rsp)
+    ; ③ 内核 = 阶段八第一课 syscall(陷入 + 内核入口保存现场)
+    mov     edi, [counter]
+    mov     rax, 60
+    syscall
+
+inc_by:
+    add     dword [counter], 1
+    ret
+
+align 512
+counter: dd 0
+'''
+watch = ["RSP", "RAX"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+阶段四看过 call/ret,阶段七看过协程 resume,阶段八看过 syscall 与 swapctx。
+四种"换执行流"总混着讲——本节用**三根轴**把它们钉死:
+①保存了什么现场 ②切换由谁执行 ③是否换地址空间(页表)。
+单步本课微实验(①的实机),其余三类引用你已做过的实验。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:①函数调用重放"
+content = """
+点「打开本课实验」单步 `call inc_by / ret`:
+RSP −8 再 +8,**只有返回地址**进出栈;寄存器现场完全不动
+(callee 若要用你的寄存器,按约定自己保存——阶段四第三课)。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "对照表:三根轴 × 四类切换"
+content = """
+| | 保存什么 | 谁来切 | 换地址空间? |
+|---|---|---|---|
+| **函数调用** | 仅返回地址(寄存器按约定) | 用户代码(call/ret) | 否 |
+| **用户协程**(阶段七/八) | 协程帧或全套 callee-saved+栈 | 用户代码(resume/swapctx) | 否 |
+| **线程**(OS) | 全套通用+标志(+FP/SIMD) | **内核调度器** | 否(同一进程内) |
+| **进程/内核入口**(阶段八) | 全套 + 页表指针 CR3 | 内核(syscall/中断/调度) | syscall 不换;进程切换换 |
+
+关键结论:**②和③只差"谁保存现场"**;③和④只差"换不换 CR3"。
+成本排序:① < ② < ③ < ④,正好逐级多干一件事。
+"""
+
+[[steps]]
+kind = "state"
+title = "成本直觉:为什么 async 存在"
+content = """
+- 函数调用 ~1ns 级;swapctx 十几条指令 ~10ns 级
+- 线程切换:陷入内核 + 调度 + 恢复,~1-10µs(还有缓存污染)
+- 进程切换:再加换 CR3 → TLB 部分失效,又贵一截
+
+`async/await`(阶段七)之所以快:**它只是②**——状态存协程帧,
+不进内核、不动调度器,一百万个协程的内存也只是帧大小之和。
+把它当成"免费线程"用(比如做阻塞 IO)就全错了——它切换便宜,**阻塞一样贵**。
+"""
+
+[[steps]]
+kind = "theory"
+title = "信号/中断算第几类"
+content = """
+硬件中断/信号 = 被"打断者"完全被动,现场由内核入口代码保存(阶段八第一课的入口展开),
+类似④但由事件驱动;ARM64 上入口就是异常向量表(下一课 SVC 之旅的延伸)。
+记忆:**被动触发、内核保存**的,归内核类。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `std::thread` 上下文切换 = ③;`std::coroutine_handle::resume` = ②
+- `std::async` 的实现策略决定它走②还是③(实现定义,查你的标准库)
+- 锁的争用本质:线程③切换次数 = 性能杀手;协程/无锁(阶段九)减少③
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "协程 = 轻量线程所以能并行" —— ②不换内核调度,同一时刻只有一个在跑
+- ❌ "syscall 很快所以随便调" —— 它是③,比②贵两个数量级
+- ❌ "进程切换 = 线程切换 + 换页表而已" —— TLB/缓存效应常是主成本
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:给切换计费"
+content = """
+把阶段八第二课的 swapctx 复制进本实验(或打开那课的实验),
+用 TracePanel 数:一次 A→B→A 往返共几条指令(约 30)。
+同样让"任务"通过 write(1,&counter,4) 打一次日志(阶段八第一课):
+对比加上 syscall 后的指令数——**②与③的成本差,亲手数出来**。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "给定切换类型描述,判断属于哪一类(习题中心,概念题以预测寄存器载体呈现)。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 三根轴:现场多少 / 谁来切 / 换不换地址空间
+- call < swapctx < 线程切换 < 进程切换,逐级多一件事
+- async 便宜是因为它只是②;阻塞 IO 一样贵
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["context-switch-taxonomy", "cr3", "async-cost-model", "scheduler"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "SVC 与中断入口:内核入口处保存的现场长什么样(ARM64)。"

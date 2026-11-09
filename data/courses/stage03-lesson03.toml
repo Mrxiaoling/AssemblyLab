@@ -1,0 +1,158 @@
+# L3.3 — 阶段三:结构体布局与对齐(内存与寻址 ③)
+
+[lesson]
+id = "stage03-lesson03"
+title = "结构体布局与对齐:看不见的填充字节"
+stage = 3
+requires = ["stage03-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "struct { char a; int b; char c; } 的 sizeof 为什么是 12 而不是 6?"
+outcomes = ["理解成员偏移(offsetof)即 displacement", "理解对齐填充的动机", "会推算结构体布局"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+; struct Rec { char a; int b; char c; }  —— 真实编译器布局:sizeof = 12
+;   +0: a        (1 字节)
+;   +1..+3: 填充  (3 字节,为了 b 对齐到 4)
+;   +4: b        (4 字节)
+;   +8: c        (1 字节)
+;   +9..+11: 尾部填充(3 字节,让数组元素都 4 对齐)
+
+_start:
+    lea rbx, [rec]
+    mov byte  [rbx],    0x41        ; a  = 'A'      → [base+0]
+    mov dword [rbx+4],  0x10203040  ; b  = 0x10203040 → [base+4](不是 +1!)
+    mov byte  [rbx+8],  0x42        ; c  = 'B'      → [base+8](不是 +5!)
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+; align 512:数据与代码保持距离(模拟器翻译块边界,见阶段报告)
+align 512
+rec: times 12 db 0
+'''
+watch = ["RBX"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+```cpp
+struct Rec { char a; int b; char c; };
+```
+按声明顺序数:1+4+1 = 6 字节?错,**sizeof(Rec) == 12**。
+多出来的 6 个字节在哪?为什么编译器要塞它们?
+本节手工把这个结构体在内存里搭出来,亲眼看到每个成员落在哪。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:跑完跳到 rec"
+content = """
+点「打开本课实验」,直接「运行」跑完。
+在内存面板地址栏输入符号 rec 的地址(**0x400200**,`align 512` 推过去的,见符号表)。
+先用 **字节(hex)视图** 看全部 12 字节,再切 **uint32 视图**。
+"""
+
+[[steps]]
+kind = "state"
+title = "逐字节核对布局"
+content = """
+字节视图应看到(偏移 +0 起):
+
+```
+41 00 00 00 | 40 30 20 10 | 42 00 00 00
+a  ←3字节填充→ | b(小端!)    | c  ←3字节填充→
+```
+
+- a 在 +0,b 在 +4,c 在 +8 —— 中间隔着**对齐填充**
+- b 的字节序 40 30 20 10 是小端排布(下一课专讲)
+- 全部 12 字节:`sizeof` 的真身
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "为什么 int 必须 4 字节对齐"
+content = """
+x86-64 虽允许非对齐访问,但:
+1. **性能**:跨 8 字节边界的读写要拆两次访存(某些平台直接 fault)
+2. **原子性**:对齐的 4/8 字节读写天然原子,编译器敢直接发普通 mov
+
+所以编译器规则:**成员的偏移必须是其自身大小的整数倍**。
+char 后面的 int 被推到 +4,+1..+3 就是填充(padding)。
+尾部再补 3 字节,保证 `Rec` 数组的每个元素都 4 对齐 → sizeof 变 12。
+"""
+
+[[steps]]
+kind = "theory"
+title = "布局推算法(通用)"
+content = """
+对每个成员依次:
+1. 当前偏移对齐到 max(自身对齐, 平台默认对齐)的整数倍
+2. 放置成员,偏移 += 大小
+3. 整体大小向上取整到最大成员对齐值
+
+`Rec` 推演:a@+0 → 填充到 4 → b@+4 → c@+8 → 尾部补齐 12。
+调换成员顺序(`int b; char a; char c;`)→ 只有尾部填充,sizeof = 8:
+**成员排序影响内存占用**——把大成员放前面是常见优化。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- 成员访问 `r.b` → `mov eax, [rbx+4]`:displacement 就是 offsetof
+- `offsetof(Rec, b)` 宏 = 让编译器替你算这个 4
+- `alignas` / `#pragma pack` 就是改这套推算规则
+- 网络传输直接 memcpy 结构体会把填充字节也发出去——不确定性来源之一
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "结构体成员是连续紧挨的" —— 对齐填充随时插队
+- ❌ "sizeof 差几个字节无所谓" —— 数组场景下错误布局会让所有元素错位
+- ❌ "填充字节是稳定值" —— 未初始化的填充是垃圾,比较结构体相等不能 memcmp 全体
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:重排成员"
+content = """
+把写入改成:`mov dword [rbx], 0x10203040`(b 在前),
+`mov byte [rbx+4], 0x41`,`mov byte [rbx+5], 0x42`——
+这正对应 `struct { int b; char a; char c; }` 的布局:sizeof 8,零浪费。
+用 uint8 视图核对 40 30 20 10 41 42 00 00。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "阶段三习题中心:给定结构体,预测成员偏移与写入结果。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 成员访问 = [base + offsetof],offsetof 由编译器按对齐规则算出
+- 对齐:成员偏移对齐到自身大小;sizeof 取整到最大对齐
+- 成员排序可省内存;填充字节内容不可依赖
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["struct-layout", "alignment-padding", "offsetof", "data-endianness"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "端序:同一块内存的两种读法。"

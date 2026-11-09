@@ -1,0 +1,47 @@
+# 习题:汇编转 C++(阶段三,8 题型 ③)
+
+[exercise]
+id = "stage09-q04-asm2cpp"
+type = "asm2cpp"
+title = "把这段汇编翻译回 C++(自评要点)"
+stage = 9
+lesson = "stage09-lesson01"
+knowledge = ["sse-basics", "lane-semantics", "auto-vectorization"]
+difficulty = 3
+related_experiment = "stage09-lesson01"
+
+hints.level1 = "paddd 的四个 lane 各自独立相加;想想 C++ 的哪种循环会被编译成它。"
+hints.level2 = "等价于四个 int 的并行加:c[i] = a[i] + b[i](i=0..3);编译器 -O2 的自动向量化产物。"
+answer_md = """
+参考翻译(一):
+
+```cpp
+// a, b, c 均为 int*,且按 16 字节对齐
+for (int i = 0; i < 4; i++) {
+    c[i] = a[i] + b[i];
+}
+```
+
+关键对应:
+- `movdqa xmm0, [a]` ← 读 a[0..3](一次 128 位)
+- `paddd xmm0, xmm1` ← 4 个 lane 并行加
+- `movdqa [c], xmm0` ← 写回 c[0..3]
+
+`paddd` 的 `d` = doubleword(32 位 lane);换成 `paddq` 就是 2 个 64 位 lane。
+"""
+
+[self_check]
+display = """
+```asm
+movdqa xmm0, [a]
+movdqa xmm1, [b]
+paddd  xmm0, xmm1
+movdqa [c], xmm0
+```
+"""
+items = [
+    "我能说出每条指令对应哪一行 C++(或哪半行)",
+    "我理解 paddd 的 4 个 lane 是独立相加、互不进位的",
+    "我知道为什么 movdqa 要求 16 字节对齐(movdqu 不要求)",
+    "我能解释为什么这段代码比 4 次标量 mov+add+mov 快",
+]

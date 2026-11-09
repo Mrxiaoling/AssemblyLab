@@ -1,0 +1,147 @@
+# L3.2 — 阶段三:数组遍历(内存与寻址 ②)
+
+[lesson]
+id = "stage03-lesson02"
+title = "数组遍历:[base + index*scale] 的真面目"
+stage = 3
+requires = ["stage03-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "C++ 的 for 循环累加数组,arr[i] 这一个下标操作,汇编里是几条指令?"
+outcomes = ["掌握 [base+index*scale] 寻址", "理解 int 数组的 scale=4", "会写汇编循环(cmp/jge/inc)"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    lea rbx, [arr]        ; RBX = 数组首地址
+    xor ecx, ecx          ; i = 0
+    xor eax, eax          ; sum = 0
+.loop:
+    cmp ecx, 5            ; i < 5 ?
+    jge .done
+    add eax, [rbx+rcx*4]  ; sum += arr[i] —— 一条指令完成下标寻址
+    inc ecx
+    jmp .loop
+.done:
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+arr: dd 3, 7, 11, 5, 9     ; 期望 sum = 35 (0x23)
+'''
+watch = ["RAX", "RCX", "RBX"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+```cpp
+int arr[5] = {3,7,11,5,9};
+int sum = 0;
+for (int i = 0; i < 5; i++) sum += arr[i];
+```
+`arr[i]` 看着像"访问数组",其实是一条寻址公式:
+**地址 = 数组首地址 + i × 每个元素的字节数**。
+本节在模拟器里把它跑给你看。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:循环三连跑起来"
+content = """
+点「打开本课实验」。别急着单步——先点「运行」跑完,
+看 RAX = 0x23(35)。再 Reset 回来逐条走,重点盯 `.loop` 里的三条。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "核心一行:add eax, [rbx+rcx*4]"
+content = """
+这一行同时做了三件事:
+1. **算地址**:rbx + rcx*4(硬件做的,不是软件循环乘)
+2. **读内存**:从算出的地址取 4 字节
+3. **加法**:加进 eax
+
+`*4` 就是 `sizeof(int)`。若数组是 `long`,这里就是 `*8`——
+下标乘法由 scale 字段硬件承担,C++ 的"元素大小"知识就固化在这一个编码位里。
+"""
+
+[[steps]]
+kind = "state"
+title = "观察循环变量"
+content = """
+单步 5 圈 `.loop`,盯三个寄存器的节拍:
+- RCX:0→1→2→…(i++)
+- RAX:3→10→21→26→35(累加)
+- RBX:始终不变(首地址)
+
+对照「轨迹」面板:同样的 3 条指令重复 5 次——
+循环在汇编里就是"跳回去",没有任何神秘结构。
+"""
+
+[[steps]]
+kind = "theory"
+title = "为什么 int 数组 scale 是 4"
+content = """
+内存按字节编址。int 占 4 字节,所以相邻元素地址差 4:
+arr[0] @ A,arr[1] @ A+4,arr[2] @ A+8……
+scale 编码只有 1/2/4/8 四档——恰好是所有标量类型的大小。
+`char` 数组不需要 scale(×1)。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `arr[i]` ≡ `*(arr+i)`:下标运算符就是指针算术的语法糖
+- 越界 `arr[100]`:硬件照算 A+400 并读——汇编层面没有"越界检查"这回事
+- `-O2` 下循环会被展开/向量化,但寻址公式不变
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "arr[i] 要先乘法再读,两条指令" —— scale 编码进同一条指令
+- ❌ "数组名是常量指针所以有独立存储" —— arr 只是地址本身,不占内存
+- ❌ "越界会报错" —— 在这层抽象里不会;报错是操作系统的页保护,且只在越得很远时
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:改成 long 数组"
+content = """
+把 `dd` 改成 `dq 3,7,11,5,9`,`[rbx+rcx*4]` 改成 `[rbx+rcx*8]`,
+cmp 的 5 不变。重新运行,RAX 仍是 0x23——
+**元素变大只影响 scale,不影响逻辑**。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "配套习题:预测数组求和结果 / 补全寻址指令。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- arr[i] = 一条 [base+index*scale] 指令
+- scale = 元素字节数(int→4,long→8)
+- 汇编的循环 = cmp + 条件跳转 + jmp 回跳
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["array", "index-scale", "loop-pattern", "pointer-arithmetic"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "结构体布局与对齐:displacement 与补齐的字节。"

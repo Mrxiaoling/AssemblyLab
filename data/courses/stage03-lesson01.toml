@@ -1,0 +1,151 @@
+# L3.1 — 阶段三:地址与指针(内存与寻址 ①)
+
+[lesson]
+id = "stage03-lesson01"
+title = "地址与指针:lea 取址,方括号解引用"
+stage = 3
+requires = ["stage02-lesson02"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "C++ 的指针 int* p = &x; *p = 5; 在 CPU 层面到底是什么指令?"
+outcomes = ["理解地址就是数字", "掌握 lea 取址与 [] 解引用", "能在内存面板中直接观察指针写入"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    lea rbx, [num]        ; RBX = num 的地址(取址,同 C++ 的 &num)
+    mov eax, [rbx]        ; 解引用读:eax = *p
+    add eax, 5
+    mov [rbx], eax        ; 解引用写:*p = eax(内存里 0x25 → 0x2A)
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+; align 512:把数据推到 0x400200(距代码 ≥0x200 字节)。
+; 模拟器边界:写入距指令 <0x200 字节的地址会触发 Unicorn 翻译块回滚(见阶段报告);
+; 真实 CPU 无此限制,但"数据与代码分页"本就是常见工程习惯。
+align 512
+num:
+    dd 0x25
+'''
+watch = ["RBX", "EAX"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+`int* p = &num; *p = 5;` 这两行 C++ 编译后长什么样?
+
+答案的原理极其朴素:**地址就是数字**。
+- `&num` → 把一个地址数字装进寄存器
+- `*p` → 用这个数字当门牌号去读写内存
+
+本节在工作台里逐条验证。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:加载并单步"
+content = """
+点上方「打开本课实验」,在工作台反复单步。
+源码里 `num: dd 0x25` 是手工布置的数据,`align 512` 把它推到 **0x400200**
+(与代码保持半个翻译块的距离),地址可从左侧符号表读到。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "lea:取址指令"
+content = """
+执行 `lea rbx, [num]` 后,RBX 变成一个 **0x400000 出头的地址**。
+
+关键认知:`lea` = Load Effective Address。它**不读内存**,
+只是把方括号里表达式的"地址算术结果"装进寄存器。
+C++ 的 `&` 取址,绝大多数就是它。
+"""
+
+[[steps]]
+kind = "state"
+title = "方括号:解引用"
+content = """
+`mov eax, [rbx]` 才真正出门牌号取东西——这就是 `*p`。
+接着 `mov [rbx], eax` 把值写回去。
+
+观察方法:单步到最后一条 `mov [rbx], eax` 前后,
+点内存面板「RBP」旁的地址输入,输入 RBX 的值(或直接跳到符号 num 的地址),
+用 **uint32 视图** 看:0x25 变成了 0x2A。
+"""
+
+[[steps]]
+kind = "theory"
+title = "寻址的通用公式"
+content = """
+x86-64 的内存操作数有统一公式(六个部件):
+
+```
+[ base + index*scale + displacement ]
+  rbx  +  rcx*4     +  0x10
+```
+
+本节只用最简单的 `[base]`。数组(下一课)用 `[base+index*scale]`,
+结构体成员用 `[base+displacement]`。全部寻址都是这一个公式的特例。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+int num = 0x25;
+int* p = &num;   // mov rbx, num的地址(高优化级别下就是 lea)
+*p += 5;         // add dword [rbx], 5 —— 与我们手写的一一对应
+```
+指针变量 p 本身也占内存(通常 8 字节),里面装的正是 RBX 这样的地址值。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "lea 会访问内存" —— lea 只做地址算术,不触发内存读(它也因此被借来做乘加运算)
+- ❌ "指针是特殊类型所以机器码特殊" —— 机器码里没有任何"指针"痕迹,只有地址数字
+- ❌ "mov eax,[rbx] 中 rbx 是值" —— 方括号里的才是地址,括号外的操作数才是值
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:改偏移"
+content = """
+把 `mov [rbx], eax` 改成 `mov [rbx+1], eax` 再单步——
+用 uint8 视图看 num 附近:写入跑到了别的位置,字节错位。
+这就是"指针偏移算错"在内存里的真实样子(也是缓冲区溢出的雏形)。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "配套习题见习题中心:预测指针读写后的寄存器与内存。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 地址就是数字;指针 = 装地址的变量
+- lea 取址(&),方括号解引用(*)
+- 通用寻址公式 [base + index*scale + disp],一切寻址皆其特例
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["lea", "indirect-addressing", "pointer", "addressing-formula"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "数组遍历:让 index*scale 上场。"

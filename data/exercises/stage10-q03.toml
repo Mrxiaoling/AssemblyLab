@@ -1,0 +1,40 @@
+# 习题:ARM64 独占访问(阶段九/十)
+
+[exercise]
+id = "stage10-q03-predict-llsc"
+type = "predict"
+title = "预测:ldaxr/stlxr 成功后的内存与状态"
+stage = 10
+lesson = "stage09-lesson03"
+isa = "arm64"
+knowledge = ["ll-sc", "stlxr", "spinlock"]
+difficulty = 3
+related_experiment = "stage09-lesson03"
+
+hints.level1 = "stlxr 的状态寄存器(第一个操作数)0=独占成功;成功后内存=新值。"
+hints.level2 = "初始 0 → ldaxr w0 读 0 → stlxr 写 1 成功(w3=0)→ 内存=1。"
+
+[predict]
+exec = "step:5"
+asm = """
+.global _start
+_start:
+    adr     x2, lock_var
+    mov     x4, #1
+    ldaxr   w0, [x2]
+    stlxr   w3, x4, [x2]
+    ldr     x9, [x2]
+    ret
+.balign 512
+lock_var: .word 0
+"""
+
+[[predict.questions]]
+key = "X9"
+prompt = "第 5 条(ldr x9)读回的锁内存 = ?"
+expect_kind = "reg:X9"
+
+[[predict.questions]]
+key = "X3"
+prompt = "stlxr 的状态(w3 写入会把 X3 上半清零)→ X3 = ?"
+expect_kind = "reg:X3"

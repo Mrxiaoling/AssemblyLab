@@ -1,0 +1,167 @@
+# L7.1 — 阶段七:协程帧与状态机(C++20 协程 ①)
+
+[lesson]
+id = "stage07-lesson01"
+title = "协程帧:调用 foo() 时到底发生了什么"
+stage = 7
+requires = ["stage04-lesson01"]
+estimated_minutes = 50
+
+[lesson.goal]
+problem = "调用一个协程函数,它没有执行就返回了——CPU 层面发生了什么?"
+outcomes = ["理解协程帧的分配(编译器选择,非标准规定)", "读懂 __coro_frame 的真实字段", "区分 C++ 标准语义与 clang 实现"]
+
+[lesson.experiment]
+mode = "debug"
+compiler = "clang++"
+isa = "x86-64"
+source = '''#include <coroutine>
+#include <cstdio>
+#include <exception>
+
+struct Task {
+    struct promise_type {
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+    std::coroutine_handle<> h;
+    void resume() { h.resume(); }
+};
+
+Task foo(int seed) {
+    int local = seed * 2;
+    std::printf("A %d\n", local);
+    co_await std::suspend_always{};
+    std::printf("B\n");
+}
+
+int main() {
+    Task t = foo(21);
+    std::printf("main: 拿到句柄,协程尚未执行\n");
+    t.resume();
+    std::printf("main: done\n");
+    return 0;
+}
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+普通函数:调用 → 执行 → 返回,栈帧随用随弃。
+协程:`Task t = foo(21);` 后 **A 都没打印**——函数体没执行!
+
+标准规定的语义只有一条:协程体在 `initial_suspend()` 决定的时机开始执行。
+**帧在哪分配、长什么样,是编译器的实现选择**——本实验全程用
+`Ubuntu clang 14.0.0-1ubuntu1.1 -std=c++20 -O0 -g`,所见皆该版本产物,不代表标准。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:断进协程,看帧"
+content = """
+点「打开本课实验」(自动以 clang++ 进入真机调试)。
+启动调试 → 在 `co_await` 行设断点 → 「▶ 继续」。
+右侧切到「协程」页签 → 点「⏺ 录制挂起/恢复时间线」。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "观察点 1-3:调用、分配、内容"
+content = """
+时间线的每一站都挂着**真实的 __coro_frame**(clang 的帧结构,字段来自 DWARF):
+
+```
+__resume_fn  = 0x… <foo(int)>     ← 恢复时跳到这里
+__destroy_fn = 0x… <foo(int)>     ← 析构时用
+__promise    = {…}                ← promise 对象嵌在帧内(clang 布局)
+__coro_index = 2                  ← 状态机当前状态编号
+seed / local = …                  ← 跨挂起点的参数与局部变量
+```
+
+**观察点 1**(调用时发生了什么):反汇编面板里 foo 的开头不是普通序言,
+而是 `operator new` 申请帧 + 把参数拷进帧 + 装填 resume/destroy 函数指针。
+**观察点 2**(帧在哪分配):协程帧地址在**栈上**——这不是标准要求!
+标准只说"实现可决定堆分配";clang 的 HALO 优化在本例把帧直接放进了调用者栈
+(因句柄未逃逸出 main)。关掉该优化(-fno-elide-constructibles / 传 -O0 也可能保留)
+帧就在堆上。**观察点 3**(帧里保存了什么):跨挂起点的 seed/local + 状态编号 + 恢复所需的一切。
+"""
+
+[[steps]]
+kind = "state"
+title = "观察点 4:promise_type 在哪"
+content = """
+帧字段里的 `__promise` 就是 promise 对象——clang 把它**嵌在帧内**。
+标准要求:get_return_object/initial_suspend/final_suspend/return_void 都通过它回调。
+单步观察:main 里 `Task t = foo(21)` 返回时,promise 的 get_return_object 已执行
+(所以 t 拿到了句柄)——但**函数体一行未跑**。
+"""
+
+[[steps]]
+kind = "theory"
+title = "状态机:__coro_index"
+content = """
+clang 把协程体编译成**按 index 分发的一次函数体**:
+- index 初值 = 分支表入口,执行到挂起点存档 index,再 ret(把控制权还给 resume 调用方)
+- `resume()` = 跳到 __resume_fn = 重新进入同一函数体,按 index 直达上次挂起点之后
+
+「协程」页签的状态机示意由**本机真实运行轨迹**推导,标注了「实现示意」——
+GCC 14+ 的状态编号与帧布局不同(-fdump-coroutine 可见),不要把 clang 布局当标准。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- 标准只承诺:handle.resume() → 从上次挂起点之后继续;帧存活至 handle 销毁
+- 帧的分配器、布局、状态编码全是实现细节
+- 换 GCC 14 编译同一段代码,帧字段名完全不同——这正是"标注编译器版本"的原因
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "协程帧一定在堆上" —— 标准允许实现优化(HALO);以反汇编为准
+- ❌ "promise 是协程的局部变量" —— 它是帧内成员,由实现布局
+- ❌ "co_await 挂起 = 线程阻塞" —— 挂起只保存状态并返回;线程照常干别的
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:让帧逃逸到堆上"
+content = """
+把 `Task t = foo(21);` 改为把 t 存进全局变量(std::vector<Task>& 存活到 main 外),
+重新编译录制:观察帧地址是否变到堆段(operator new)。
+对比两次帧地址所在内存区域——这就是"分配位置是实现选择"的直观证明。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "配套真机预测题见习题中心(断在挂起点时 __coro_index 的值)。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- 调用协程 = 分配帧 + 拷贝参数 + (按 initial_suspend)决定是否立即执行
+- 帧内容:resume/destroy 函数指针 + promise + 状态编号 + 跨挂起点变量
+- 帧分配位置与布局是编译器选择(clang 14 本例 = 栈上 HALO)
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["coroutine-frame", "promise-type", "coroutine-handle", "halo"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "co_await 的展开:await_ready/await_suspend/await_resume 三部曲。"

@@ -1,0 +1,826 @@
+# x86-64 ISA 数据包(Phase 1)
+# schema: docs/ISA_DESIGN.md §2 · 数据由 lab-core::isa 加载
+# 执行真值来自 Unicorn(spikes/unicorn_step_diff/RESULT.md),本文件的
+# instruction_notes 仅供解释层,不参与执行。
+
+[isa]
+id = "x86-64"
+name = "Intel/AMD x86-64"
+endian = "little"
+emulator_arch = "unicorn:x86"
+emulator_mode = "unicorn:x86-64"
+assembler = "nasm"
+assembler_syntax = "intel"
+
+# 单步面板寄存器顺序(教学重点排前)
+panel_registers = [
+  "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
+  "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15",
+  "RIP", "RFLAGS",
+]
+
+# 栈顶初始值(留 0x1000 余量,[RSP] 处写终止桩地址)
+stack_init = "0x7FF0000FF000"
+# 程序 ret 到此地址 = 正常结束(位于代码段末尾,已映射,由 code hook 拦截)
+exit_sentinel = "0x004FFF00"
+
+[isa.syscall_stub]
+implemented = { "0" = "read", "1" = "write", "12" = "brk", "60" = "exit" }
+note = "教学桩实现(Linux 语义子集),非真实内核调用"
+
+
+[isa.memory_map.code]
+base = "0x00400000"
+size = 0x100000
+name = "代码段"
+
+[isa.memory_map.data]
+base = "0x00600000"
+size = 0x100000
+name = "数据段"
+
+[isa.memory_map.heap]
+base = "0x01000000"
+size = 0x100000
+name = "堆"
+
+[isa.memory_map.stack]
+base = "0x7FF000000000"
+size = 0x100000
+name = "栈"
+
+# ---------------------------------------------------------------------------
+# 寄存器(canonical + 别名视图 + 子寄存器写语义)
+# ---------------------------------------------------------------------------
+[[registers]]
+canonical = "RAX"
+size = 64
+aliases = ["EAX", "AX", "AL", "AH"]
+group = "general"
+role_notes = { zh = "累加器;函数返回值默认经 RAX 返回;隐式用于 MUL/DIV" }
+[[registers.subregisters]]
+name = "EAX"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "AX"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "AL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "AH"
+offset = 8
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RBX"
+size = 64
+aliases = ["EBX", "BX", "BL", "BH"]
+group = "general"
+role_notes = { zh = "基址寄存器;SysV callee-saved" }
+[[registers.subregisters]]
+name = "EBX"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "BX"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "BL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "BH"
+offset = 8
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RCX"
+size = 64
+aliases = ["ECX", "CX", "CL", "CH"]
+group = "general"
+role_notes = { zh = "计数寄存器;移位指令的移位数只看 CL;SysV 第 4 参数" }
+[[registers.subregisters]]
+name = "ECX"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "CX"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "CL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "CH"
+offset = 8
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RDX"
+size = 64
+aliases = ["EDX", "DX", "DL", "DH"]
+group = "general"
+role_notes = { zh = "数据寄存器;MUL/DIV 高位结果;SysV 第 3 参数" }
+[[registers.subregisters]]
+name = "EDX"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "DX"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "DL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "DH"
+offset = 8
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RSI"
+size = 64
+aliases = ["ESI", "SI", "SIL"]
+group = "general"
+role_notes = { zh = "源变址;串操作源地址;SysV 第 2 参数" }
+[[registers.subregisters]]
+name = "ESI"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "SI"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "SIL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RDI"
+size = 64
+aliases = ["EDI", "DI", "DIL"]
+group = "general"
+role_notes = { zh = "目的变址;串操作目的地址;SysV 第 1 参数" }
+[[registers.subregisters]]
+name = "EDI"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "DI"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "DIL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RBP"
+size = 64
+aliases = ["EBP", "BP", "BPL"]
+group = "pointer"
+role_notes = { zh = "栈帧基址指针;函数序言通常 RBP = RSP" }
+[[registers.subregisters]]
+name = "EBP"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "BP"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "BPL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RSP"
+size = 64
+aliases = ["ESP", "SP", "SPL"]
+group = "pointer"
+special = "stack_pointer"
+role_notes = { zh = "栈顶指针;PUSH/POP/CALL/RET 隐式读写" }
+[[registers.subregisters]]
+name = "ESP"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "SP"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "SPL"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R8"
+size = 64
+aliases = ["R8D", "R8W", "R8B"]
+group = "general"
+role_notes = { zh = "SysV 第 5 参数" }
+[[registers.subregisters]]
+name = "R8D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R8W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R8B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R9"
+size = 64
+aliases = ["R9D", "R9W", "R9B"]
+group = "general"
+role_notes = { zh = "SysV 第 6 参数" }
+[[registers.subregisters]]
+name = "R9D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R9W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R9B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R10"
+size = 64
+aliases = ["R10D", "R10W", "R10B"]
+group = "general"
+role_notes = { zh = "caller-saved;syscall 第 4 参数(RCX 位置被 syscall 占用)" }
+[[registers.subregisters]]
+name = "R10D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R10W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R10B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R11"
+size = 64
+aliases = ["R11D", "R11W", "R11B"]
+group = "general"
+role_notes = { zh = "caller-saved;syscall 返回时 R11 = RFLAGS" }
+[[registers.subregisters]]
+name = "R11D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R11W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R11B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R12"
+size = 64
+aliases = ["R12D", "R12W", "R12B"]
+group = "general"
+role_notes = { zh = "callee-saved" }
+[[registers.subregisters]]
+name = "R12D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R12W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R12B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R13"
+size = 64
+aliases = ["R13D", "R13W", "R13B"]
+group = "general"
+role_notes = { zh = "callee-saved" }
+[[registers.subregisters]]
+name = "R13D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R13W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R13B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R14"
+size = 64
+aliases = ["R14D", "R14W", "R14B"]
+group = "general"
+role_notes = { zh = "callee-saved" }
+[[registers.subregisters]]
+name = "R14D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R14W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R14B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "R15"
+size = 64
+aliases = ["R15D", "R15W", "R15B"]
+group = "general"
+role_notes = { zh = "callee-saved" }
+[[registers.subregisters]]
+name = "R15D"
+offset = 0
+size = 32
+write_semantics = "zero_extend_upper"
+[[registers.subregisters]]
+name = "R15W"
+offset = 0
+size = 16
+write_semantics = "preserve_upper"
+[[registers.subregisters]]
+name = "R15B"
+offset = 0
+size = 8
+write_semantics = "preserve_upper"
+
+[[registers]]
+canonical = "RIP"
+size = 64
+group = "status"
+special = "pc"
+role_notes = { zh = "指令指针;CPU 取下一条指令的地址;JMP/CALL/RET 改变它" }
+
+[[registers]]
+canonical = "RFLAGS"
+size = 64
+aliases = ["EFLAGS"]
+group = "status"
+special = "flags"
+role_notes = { zh = "标志寄存器;记录算术结果特征与系统状态" }
+
+# ---------------------------------------------------------------------------
+# 标志位
+# ---------------------------------------------------------------------------
+[[flags]]
+name = "CF"
+bit = 0
+semantics = "无符号进位/借位;无符号比较与溢出的判定依据"
+watch = true
+[[flags]]
+name = "PF"
+bit = 2
+semantics = "低 8 位中 1 的个数为偶数时置 1(奇偶校验)"
+watch = false
+[[flags]]
+name = "AF"
+bit = 4
+semantics = "低 4 位半进位(BCD 运算用)"
+watch = false
+[[flags]]
+name = "ZF"
+bit = 6
+semantics = "结果为 0 时置 1"
+watch = true
+[[flags]]
+name = "SF"
+bit = 7
+semantics = "结果最高位为 1(有符号视角即负数)"
+watch = true
+[[flags]]
+name = "DF"
+bit = 10
+semantics = "串操作方向:1 = 递减"
+watch = false
+[[flags]]
+name = "OF"
+bit = 11
+semantics = "有符号溢出:同号相加得异号(或异号相减得同号)"
+watch = true
+
+# ---------------------------------------------------------------------------
+# ABI
+# ---------------------------------------------------------------------------
+[[abis]]
+id = "sysv-amd64"
+name = "System V AMD64(Linux/macOS)"
+return_reg = "RAX"
+caller_saved = ["RAX", "RCX", "RDX", "RSI", "RDI", "R8", "R9", "R10", "R11"]
+callee_saved = ["RBX", "RBP", "R12", "R13", "R14", "R15"]
+stack_alignment = 16
+red_zone = 128
+shadow_space = 0
+[[abis.integer_arg_regs]]
+order = 1
+reg = "RDI"
+[[abis.integer_arg_regs]]
+order = 2
+reg = "RSI"
+[[abis.integer_arg_regs]]
+order = 3
+reg = "RDX"
+[[abis.integer_arg_regs]]
+order = 4
+reg = "RCX"
+[[abis.integer_arg_regs]]
+order = 5
+reg = "R8"
+[[abis.integer_arg_regs]]
+order = 6
+reg = "R9"
+[abis.syscall]
+conv = "syscall"
+nr_reg = "RAX"
+args = ["RDI", "RSI", "RDX", "R10", "R8", "R9"]
+
+[[abis]]
+id = "win-x64"
+name = "Windows x64"
+return_reg = "RAX"
+caller_saved = ["RAX", "RCX", "RDX", "R8", "R9", "R10", "R11"]
+callee_saved = ["RBX", "RBP", "RSI", "RDI", "R12", "R13", "R14", "R15"]
+stack_alignment = 16
+red_zone = 0
+shadow_space = 32
+[[abis.integer_arg_regs]]
+order = 1
+reg = "RCX"
+[[abis.integer_arg_regs]]
+order = 2
+reg = "RDX"
+[[abis.integer_arg_regs]]
+order = 3
+reg = "R8"
+[[abis.integer_arg_regs]]
+order = 4
+reg = "R9"
+
+# ---------------------------------------------------------------------------
+# 指令教学注释(解释层;数值一律以执行结果为准)
+# ---------------------------------------------------------------------------
+[[instruction_notes]]
+mnemonic = "MOV"
+category = "数据传送"
+summary = "在寄存器/内存/立即数之间复制数据;不影响任何标志位"
+pitfalls = ["不能内存到内存直接 MOV", "写 32 位寄存器会清零高 32 位"]
+related_cpp = "变量赋值;指针解引用读写"
+
+[[instruction_notes]]
+mnemonic = "MOVZX"
+category = "数据传送"
+summary = "零扩展传送:小源零填充到大的目标"
+pitfalls = ["源只能是寄存器或内存,不能是立即数"]
+related_cpp = "无符号小类型提升"
+
+[[instruction_notes]]
+mnemonic = "MOVSX"
+category = "数据传送"
+summary = "符号扩展传送:按源符号位填充高位"
+related_cpp = "有符号小类型提升"
+
+[[instruction_notes]]
+mnemonic = "LEA"
+category = "地址计算"
+summary = "计算有效地址并存入寄存器,但不访问内存;常被编译器用作乘加运算"
+pitfalls = ["目标是 32 位寄存器时同样零扩展高位"]
+related_cpp = "&a[i];编译器优化中的 x*4+8"
+
+[[instruction_notes]]
+mnemonic = "ADD"
+category = "算术"
+summary = "整数加法;按结果设置 CF/ZF/SF/OF/PF/AF"
+pitfalls = ["无符号溢出看 CF,有符号溢出看 OF"]
+related_cpp = "+ 与 +=;同一条指令服务两种视角"
+
+[[instruction_notes]]
+mnemonic = "SUB"
+category = "算术"
+summary = "整数减法;按结果设置 CF/ZF/SF/OF/PF/AF"
+pitfalls = ["CF=1 表示无符号借位(被减数小于减数)"]
+related_cpp = "- 与 -=;比较操作的本质"
+
+[[instruction_notes]]
+mnemonic = "CMP"
+category = "比较"
+summary = "做减法但丢弃结果,只设置标志位;是所有条件跳转的事实标准前奏"
+related_cpp = "if/比较运算符的底层形态"
+
+[[instruction_notes]]
+mnemonic = "TEST"
+category = "逻辑"
+summary = "按位与但丢弃结果,只设置标志位;常用于判断某位是否为 0"
+related_cpp = "(x & mask) == 0 判定"
+
+[[instruction_notes]]
+mnemonic = "AND"
+category = "逻辑"
+summary = "按位与;清零 CF 与 OF,按结果设置 ZF/SF/PF"
+related_cpp = "&、位掩码清零"
+
+[[instruction_notes]]
+mnemonic = "OR"
+category = "逻辑"
+summary = "按位或;清零 CF 与 OF,按结果设置 ZF/SF/PF"
+related_cpp = "|、置位标志位"
+
+[[instruction_notes]]
+mnemonic = "XOR"
+category = "逻辑"
+summary = "按位异或;xor 自身是最快的清零手段,且清零 CF/OF"
+pitfalls = ["xor eax,eax 与 mov eax,0 的编码更短"]
+related_cpp = "零初始化;位翻转"
+
+[[instruction_notes]]
+mnemonic = "NOT"
+category = "逻辑"
+summary = "按位取反;不影响任何标志位"
+related_cpp = "~"
+
+[[instruction_notes]]
+mnemonic = "INC"
+category = "算术"
+summary = "加 1;不影响 CF(保留进位以便循环计数),设置 ZF/SF/OF/PF/AF"
+pitfalls = ["与 ADD 1 的标志行为不同:CF 不变"]
+
+[[instruction_notes]]
+mnemonic = "DEC"
+category = "算术"
+summary = "减 1;不影响 CF,设置 ZF/SF/OF/PF/AF"
+
+[[instruction_notes]]
+mnemonic = "NEG"
+category = "算术"
+summary = "取负(0 - x);CF=0 仅当操作数为 0"
+related_cpp = "-x"
+
+[[instruction_notes]]
+mnemonic = "MUL"
+category = "算术"
+summary = "无符号乘法;8/16/32 位形式结果扩展到 AX/DX:AX/RDX:RAX"
+pitfalls = ["CF=OF=1 表示高半部分非零(结果超出低半部分)"]
+
+[[instruction_notes]]
+mnemonic = "IMUL"
+category = "算术"
+summary = "有符号乘法;二操作数/三操作数形式不产生高位结果"
+pitfalls = ["溢出时 CF=OF=1 且结果被截断"]
+
+[[instruction_notes]]
+mnemonic = "DIV"
+category = "算术"
+summary = "无符号除法;商在 AL/AX/EAX/RAX,余数在 AH/DX/EDX/RDX"
+pitfalls = ["除以 0 或商溢出 → #DE 异常(教学沙箱中为错误暂停)"]
+
+[[instruction_notes]]
+mnemonic = "IDIV"
+category = "算术"
+summary = "有符号除法;商向零截断"
+pitfalls = ["INT_MIN / -1 触发 #DE"]
+
+[[instruction_notes]]
+mnemonic = "SHL"
+category = "移位"
+summary = "左移,低位补 0;最后移出的一位进 CF"
+pitfalls = ["移位数取 CL 的低 6 位(64 位模式下)"]
+related_cpp = "<<"
+
+[[instruction_notes]]
+mnemonic = "SHR"
+category = "移位"
+summary = "逻辑右移,高位补 0"
+related_cpp = ">> (unsigned)"
+
+[[instruction_notes]]
+mnemonic = "SAR"
+category = "移位"
+summary = "算术右移,高位补符号位(保持有符号值)"
+related_cpp = ">> (signed)"
+
+[[instruction_notes]]
+mnemonic = "PUSH"
+category = "栈"
+summary = "RSP 减 8 并把值写入栈顶"
+related_cpp = "函数调用、保存寄存器"
+
+[[instruction_notes]]
+mnemonic = "POP"
+category = "栈"
+summary = "读取栈顶值到操作数,RSP 加 8"
+
+[[instruction_notes]]
+mnemonic = "CALL"
+category = "调用"
+summary = "把返回地址(下一条指令地址)压栈,然后跳转到目标"
+related_cpp = "函数调用;参数与栈帧的起点"
+
+[[instruction_notes]]
+mnemonic = "RET"
+category = "调用"
+summary = "从栈顶弹出返回地址并跳转过去"
+pitfalls = ["RET n 形式还会额外释放 n 字节栈空间(Win64 调用方清栈)"]
+
+[[instruction_notes]]
+mnemonic = "JMP"
+category = "控制流"
+summary = "无条件跳转"
+
+[[instruction_notes]]
+mnemonic = "JE"
+category = "控制流"
+summary = "ZF=1 时跳转(相等)"
+[[instruction_notes]]
+mnemonic = "JNE"
+category = "控制流"
+summary = "ZF=0 时跳转(不等)"
+[[instruction_notes]]
+mnemonic = "JZ"
+category = "控制流"
+summary = "ZF=1 时跳转(JE 的别名)"
+[[instruction_notes]]
+mnemonic = "JNZ"
+category = "控制流"
+summary = "ZF=0 时跳转(JNE 的别名)"
+[[instruction_notes]]
+mnemonic = "JS"
+category = "控制流"
+summary = "SF=1 时跳转(结果为负)"
+[[instruction_notes]]
+mnemonic = "JNS"
+category = "控制流"
+summary = "SF=0 时跳转(结果非负)"
+[[instruction_notes]]
+mnemonic = "JC"
+category = "控制流"
+summary = "CF=1 时跳转(无符号小于/借位)"
+[[instruction_notes]]
+mnemonic = "JNC"
+category = "控制流"
+summary = "CF=0 时跳转"
+[[instruction_notes]]
+mnemonic = "JB"
+category = "控制流"
+summary = "CF=1 时跳转;无符号比较 a < b"
+[[instruction_notes]]
+mnemonic = "JAE"
+category = "控制流"
+summary = "CF=0 时跳转;无符号比较 a >= b"
+[[instruction_notes]]
+mnemonic = "JBE"
+category = "控制流"
+summary = "CF=1 或 ZF=1;无符号 a <= b"
+[[instruction_notes]]
+mnemonic = "JA"
+category = "控制流"
+summary = "CF=0 且 ZF=0;无符号 a > b"
+[[instruction_notes]]
+mnemonic = "JL"
+category = "控制流"
+summary = "SF≠OF;有符号 a < b"
+[[instruction_notes]]
+mnemonic = "JGE"
+category = "控制流"
+summary = "SF=OF;有符号 a >= b"
+[[instruction_notes]]
+mnemonic = "JLE"
+category = "控制流"
+summary = "ZF=1 或 SF≠OF;有符号 a <= b"
+[[instruction_notes]]
+mnemonic = "JG"
+category = "控制流"
+summary = "ZF=0 且 SF=OF;有符号 a > b"
+[[instruction_notes]]
+mnemonic = "LOOP"
+category = "控制流"
+summary = "RCX 减 1,非零则跳转;等价于 dec rcx + jnz"
+pitfalls = ["RCX 初值为 0 会循环 2^64 次——先用 dec/jnz 判零"]
+
+[[instruction_notes]]
+mnemonic = "SYSCALL"
+category = "系统"
+summary = "陷入内核的快速系统调用;教学沙箱中由桩实现(write/exit/read/brk)"
+pitfalls = ["调用后 RCX=返回地址、R11=RFLAGS;参数寄存器与函数调用不同"]
+
+[[instruction_notes]]
+mnemonic = "NOP"
+category = "杂项"
+summary = "空操作;对齐填充与调试插桩用"
+
+[[instruction_notes]]
+mnemonic = "paddd"
+category = "SIMD"
+summary = "SSE 向量加:paddd xmm0, xmm1 = 4 个 32 位 lane 同时相加(128 位一条搞定)"
+pitfalls = ["movdqa 要求 16 字节对齐,跨对齐用 movdqu", "lane 间不进位——溢出只在各自 32 位内"]
+related_cpp = "SIMD 向量化循环(-O2 自动向量化)"
+
+[[instruction_notes]]
+mnemonic = "movdqa"
+category = "SIMD"
+summary = "128 位对齐搬运(内存↔XMM);movdqu 是非对齐版"
+pitfalls = ["地址不对齐 16 字节 → #GP 异常(教学沙箱里是 Fault)"]
+
+[[instruction_notes]]
+mnemonic = "lock"
+category = "原子"
+summary = "锁前缀:修饰读改写指令使其对其他核原子可见(lock cmpxchg/lock xadd/lock add…)"
+pitfalls = ["只能用于内存操作数指令", "缓存行锁定:同行的其他数据也会被牵连(伪共享)"]
+related_cpp = "std::atomic 的机器形态"
+
+[[instruction_notes]]
+mnemonic = "cmpxchg"
+category = "原子"
+summary = "比较交换:RAX 与目标比较,相等则写入新值且 ZF=1;不等则把目标值载入 RAX 且 ZF=0——CAS 原语本体"
+pitfalls = ["比较值必须在 RAX/AL/EAX 里", "通常与 lock 连用"]
+related_cpp = "atomic.compare_exchange_weak"
+
+[[instruction_notes]]
+mnemonic = "xadd"
+category = "原子"
+summary = "交换加法:旧值换出到目标寄存器,内存=旧+新;lock xadd = fetch_add"
+related_cpp = "atomic.fetch_add"
+
+[[instruction_notes]]
+mnemonic = "mfence"
+category = "原子"
+summary = "全序内存屏障:之前所有读写先于之后的读写全局可见(x86 强内存模型下仅此一条常用)"
+pitfalls = ["x86 只有 StoreLoad 需要显式屏障;ARM64 弱模型处处要 dmb"]

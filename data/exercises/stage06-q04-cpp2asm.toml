@@ -1,0 +1,67 @@
+# 习题:C++ 转汇编分析(阶段六,8 题型 ④)
+
+[exercise]
+id = "stage06-q04-cpp2asm"
+type = "cpp2asm"
+title = "读成员函数的汇编:this 从哪来,成员怎么访问"
+stage = 6
+lesson = "stage06-lesson01"
+knowledge = ["this-pointer", "member-function", "abi-sysv"]
+difficulty = 3
+related_experiment = "stage06-lesson01"
+
+hints.level1 = "SysV 约定第一个整数参数走 RDI;v.sum() 的隐藏第一参数就是它。"
+hints.level2 = "this 在 RDI;x 是 [rdi],y 是 [rdi+4](offsetof:0 和 4)。"
+answer_md = """
+以下汇编来自真实编译产物(`Ubuntu clang 14.0.0-1ubuntu1.1 -std=c++20 -O0 -g`,
+clang 14 对成员访问的展开):
+
+```asm
+Vec::sum():                     ; @Vec::sum()
+        add     edi, dword ptr [rdi + 4]
+        mov     eax, edi
+        ret
+```
+
+(该实现把 this->x 保留在 edi 里做了寄存器复用;通用形态是
+`mov eax, [rdi] / add eax, [rdi+4]`。)
+
+- **this 在哪**:RDI——SysV 第一个参数位;`v.sum()` ≡ `Vec::sum(&v)`
+- **成员怎么访问**:`[rdi + offsetof]`;int x/y 布局 → x@0、y@4
+- 机器码里没有"成员函数"痕迹,它就是个带了隐藏指针参数的普通函数
+"""
+
+[quiz]
+display = """
+源码:
+
+```cpp
+struct Vec { int x; int y; int sum(); };
+int Vec::sum() { return x + y; }
+int main() { Vec v{3, 4}; return v.sum(); }
+```
+
+编译产物(`clang 14 -std=c++20 -O0`,x86-64 SysV,节选):
+
+```asm
+Vec::sum():
+        add     edi, dword ptr [rdi + 4]
+        mov     eax, edi
+        ret
+```
+"""
+
+[[quiz.questions]]
+key = "this_reg"
+prompt = "this(隐藏第一参数)由哪个寄存器传入?(答寄存器名)"
+expect = "rdi|RDI"
+
+[[quiz.questions]]
+key = "y_offset"
+prompt = "y 成员通过 [rdi + ?] 访问,? 是多少(十进制偏移)?"
+expect = "4|0x4"
+
+[[quiz.questions]]
+key = "in_object"
+prompt = "sum 的代码是否存放在对象 v 内部?(答 是 或 否)"
+expect = "否|不是|no"

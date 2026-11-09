@@ -1,0 +1,136 @@
+# 综合项目 — 解剖 printf:从你的 C++ 到内核 write 的完整链路
+
+[lesson]
+id = "project-lesson01"
+title = "综合项目:解剖 printf 的完整调用链(实际项目关键函数分析)"
+stage = 10
+requires = ["stage08-lesson01", "stage04-lesson01", "stage06-lesson01"]
+estimated_minutes = 60
+
+[lesson.goal]
+problem = "一行 printf 到底穿过了多少层?真实项目里每一层的关键函数长什么样?"
+outcomes = ["掌握'实际项目关键函数分析'的完整工作流", "读懂 PLT/GOT 延迟绑定", "把前九个阶段的知识串成一条链"]
+
+[lesson.experiment]
+mode = "debug"
+compiler = "g++"
+isa = "x86-64"
+source = """#include <cstdio>
+
+int main() {
+    std::printf("Anatomy!\\n");
+    return 0;
+}
+"""
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "项目目标"
+content = """
+这是全平台的**综合项目**:把前九个阶段学的一切,用于解剖一行真实代码
+`std::printf("Anatomy!\\n")` —— 从你的 main,到动态链接,到 libc 内部,到最终 syscall。
+
+工作流(实际项目关键函数分析的标准流程):
+1. 编译带 -g 的版本,真机断点
+2. 单步穿过调用链,在每一层问:这一层的关键函数是谁?它做了什么?
+3. 记录每一层的"关键函数卡片"(名字/职责/关键指令)
+"""
+
+[[steps]]
+kind = "run"
+title = "第一层:你的 main 与 PLT 桩"
+content = """
+点「打开本课实验」(真机调试)。启动后反汇编面板找 main:
+`call` 的目标不是 printf 本身,而是 **printf@plt** —— PLT(Procedure Linkage Table)桩。
+
+关键函数卡片 ①:**printf@plt** —— 跳 GOT、(首次)进动态链接器、再跳真身。
+这就是**延迟绑定**:程序启动时不解析 libc 地址,第一次调用才补(阶段六 GOT/vtable 的亲戚)。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "第二层:进入 libc 的 printf"
+content = """
+步进(gdb step)进 libc:`printf` 内部先走 **__vfprintf_internal**
+(卡片 ②:格式化解析的真正实现——处理 %d/%s 规则、管理缓冲区),
+然后调用 stdio 层 **_IO_new_file_xsputn → write**(卡片 ③:stdio 缓冲,
+攒够缓冲或遇换行才真正写内核——这就是为什么 printf 不每字符一次 syscall)。
+
+在调试器「调用栈」面板(帧 #0..#n)可以直接看到这条链——每一帧都是一层关键函数。
+"""
+
+[[steps]]
+kind = "state"
+title = "第三层:syscall 指令"
+content = """
+继续单步到 libc 的 write 包装(反汇编里找 `syscall` 指令,阶段八第一课的老朋友):
+RAX=1(write)、RDI=1(stdout)、RSI=缓冲地址、RDX=长度。
+
+**项目结论卡片**:一行 printf = 你的 main → PLT → vfprintf(格式化)
+→ stdio 缓冲 → write 包装 → syscall → 内核 VFS。
+每层的关键函数与职责,就是"实际项目关键函数分析"要产出的东西。
+"""
+
+[[steps]]
+kind = "theory"
+title = "分析工作流沉淀(可复用的方法论)"
+content = """
+1. **带符号编译**(-g),断点在入口
+2. **调用栈读层**:每一帧 = 一层抽象(libc/运行时/内核)
+3. **关键指令定位**:call/PLT/GOT/syscall 是层与层的"门"
+4. **每层一张卡片**:函数名 / 职责 / 关键指令 / 与标准的关系
+5. 对不确定的行为,**回到实验引擎验证**(模式 A 复现最小场景)
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+printf 的分层是 C++ 标准库同款思想:std::cout << 也是
+格式化(ostream 层)→ 缓冲(streambuf)→ 系统调用。
+理解一层,两个世界通吃。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "printf 一个字符调一次 write" —— stdio 缓冲;看本实验的反汇编事实
+- ❌ "PLT 是安全机制" —— 它是延迟绑定的实现(加固版是 BIND_NOW/RELRO,另一个话题)
+- ❌ "libc 是黑盒没法看" —— -g + 调用栈 + 单步,黑盒就是逐层卡片
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:换 puts 再解剖"
+content = """
+把 printf("Anatomy!\\n") 换成 puts("Anatomy!")——
+GCC 会把它优化为 **puts@plt**(printf 无格式符时的可观察行为等价替换)。
+重复分析:链路短一截(无格式化层)。
+把这个差异写进你的分析卡片——这就是"编译器为什么生成某条指令"的实例。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "项目练习"
+content = "综合编程大题:实现 strcpy(阶段三知识 + 真实执行判题)。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "项目总结"
+content = """
+- printf 调用链:main → PLT → vfprintf → stdio 缓冲 → write → syscall
+- 延迟绑定:GOT/PLT 第一次调用才解析(与 vtable 同族机制)
+- 分析方法论:带符号编译 → 调用栈读层 → 关键指令定位 → 分层卡片
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["syscall", "call-ret", "stack-frame", "user-kernel-boundary"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "继续用这套工作流分析你感兴趣的真实项目函数。"

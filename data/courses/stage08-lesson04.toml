@@ -1,0 +1,147 @@
+# L8.4 — 阶段八:SVC 与中断入口(OS 与并发 ④,ARM64)
+
+[lesson]
+id = "stage08-lesson04"
+title = "SVC 之旅:陷入内核时 ARM64 保存了什么"
+stage = 8
+requires = ["stage10-lesson01", "stage08-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "ARM64 没有 syscall 指令,陷入内核的 SVC 在硬件层面做了什么?"
+outcomes = ["掌握 ARM64 syscall 约定(X8=编号,SVC #0)", "逐步观察 SVC 前后", "对照 x86 syscall 与 ARM64 SVC 的异同"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "arm64"
+source = '''// ARM64 Linux:write(1, msg, 12) 然后 exit(0)
+// 约定:编号在 X8,参数 X0-X2;SVC #0 陷入内核
+.global _start
+_start:
+    mov     x8, #64             // SYS_write = 64(与 x86 的 1 不同!)
+    mov     x0, #1              // fd = stdout
+    adr     x1, msg             // buf(adr 取地址:PC 相对,±1MB)
+    mov     x2, #12             // len
+    svc     #0                  // ← 陷入内核(教学桩处理)
+    // 返回后 X0 = 写入字节数
+    mov     x19, x0             // 留个证据(X19 callee-saved)
+    mov     x8, #93             // SYS_exit = 93
+    mov     x0, #0
+    svc     #0
+
+.balign 512
+msg:    .ascii "hello arm64!\n"
+'''
+watch = ["X8", "X0", "X1", "X2"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+x86 用 `syscall` 指令(编号在 RAX);ARM64 的等价物是 **`SVC #0`**
+(Supervisor Call)——一条"故意触发的异常"。
+编号/参数放哪由 Linux 的 ARM64 ABI 定:X8=编号,X0-X5 参数。
+本节把两次 SVC(write/exit)逐步走完,并与 x86 版对照。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:两次 SVC"
+content = """
+点「打开本课实验」(ARM64 工作台)→ 单步:
+四条装参(注意 X8 而不是 X0 装编号)→ `svc #0` → 输出面板出现 "hello arm64!"、
+X0 = 12(返回值)→ X19 留证据 → 第二次 SVC 退出(退出码 0)。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "SVC 硬件动作:异常向量表"
+content = """
+真实 ARM64 上执行 SVC:
+1. CPU 跳到 **VBAR_EL1 指向的异常向量表**的 SVC 入口(EL0→EL1,用户态→内核态)
+2. 硬件只保存极少数:**SP_EL0→tpidr 保存、PC→ELR_EL1、PSTATE→SPSR_EL1**
+3. 内核入口代码( vectors.S)再保存 X0-X30 到 pt_regs——**大头是软件干的**
+4. 按 X8 分发到 sys_write → 返回值写 X0 → eret(ELR→PC,SPSR→PSTATE)回用户态
+
+对照 x86:syscall 指令把 PC 存 RCX、标志存 R11(硬件省事),
+其余现场同样靠内核入口软件保存——**两个世界,分工一致**。
+"""
+
+[[steps]]
+kind = "state"
+title = "桩视角:约定即接口"
+content = """
+教学模拟器的 SVC 桩(阶段五接入)读取 X8(write=64/exit=93)与 X0-X2,
+行为与 x86 桩完全同构——**桩只实现"约定",不实现特权切换/向量表**。
+所以本实验能验证的是 ABI(编号、寄存器、返回值),不是内核行为;
+内核入口的展开属于"分析型内容",以 Linux 源码为准(见下)。
+"""
+
+[[steps]]
+kind = "theory"
+title = "对照表:两套 syscall 约定"
+content = """
+| 事项 | x86-64 Linux | ARM64 Linux |
+|---|---|---|
+| 触发指令 | syscall | svc #0 |
+| 编号 | RAX(write=1, exit=60) | **X8**(write=64, exit=93) |
+| 参数 | RDI, RSI, RDX, R10, R8, R9 | X0-X5 |
+| 返回值 | RAX | X0 |
+| 错误信号 | -errno 放 RAX | X0 为负值( -(errno) ) |
+| 硬件保存 | RCX=返回地址, R11=RFLAGS | ELR_EL1=PC, SPSR=PSTATE |
+
+编号都不一样——**syscall 编号是 per-架构 ABI**,这正是"跨平台抽象层"(libc)存在的理由。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+write(1, "hi\n", 3);   // glibc 内联汇编:mov x8,#64; svc #0(ARM64 版)
+```
+libc 为每个架构准备一份"syscall 胶水";你在两个 ISA 包里看到的 syscall_stub
+注释就是这份胶水的教学版。strace 在 ARM64 设备上同样可用(编号线索:64=write)。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "SVC 是 ARM64 的 syscall 指令所以编号也从 1 开始" —— 编号来自 Linux ARM64 ABI(64=write)
+- ❌ "SVC 会保存全部寄存器" —— 硬件只存 PC/PSTATE;X0-X30 由内核入口软件保存
+- ❌ "EL0/EL1 是 x86 的 Ring3/Ring0 换皮" —— 特权模型不同(AArch64 有 EL0-EL3 四级)
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:X8 改错编号"
+content = """
+把 `mov x8, #64` 改成 #65:桩报"未实现的 syscall 号"(教学桩只挂了 write/exit;
+真实内核会返回 -ENOSYS 到 X0)。再改 `mov x2, #5`:只写 5 字节,X0=5——
+参数约定在两架构间保持同构,编号不同而已。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:ARM64 write 调用的 X0 返回值(习题中心,ARM64 判题)。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- ARM64:SVC #0 陷入;X8 编号(write=64/exit=93)、X0-X5 参数、X0 返回
+- 硬件只存 PC/PSTATE 到 ELR/SPSR;寄存器现场由内核入口软件保存
+- 编号 per-架构 ABI → libc 抽象层的存在理由
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["svc", "exception-vector", "el0-el1", "linux-arm64-abi"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段九:SIMD 数组加法——同一段循环在两个 ISA 上的向量化。"

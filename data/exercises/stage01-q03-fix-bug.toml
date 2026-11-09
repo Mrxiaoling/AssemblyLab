@@ -1,0 +1,36 @@
+# 习题:Bug 修复(阶段一,8 题型 ⑤)
+
+[exercise]
+id = "stage01-q03-fix-bug"
+type = "fix_bug"
+title = "修复:这道加法被误写成了减法"
+stage = 1
+lesson = "stage01-lesson01"
+knowledge = ["add", "memory-write", "mov"]
+difficulty = 2
+related_experiment = "stage01-lesson01"
+
+hints.level1 = "程序想算 10+20 并存进内存;现在算的是 10-20。"
+hints.level2 = "把减法换成正确的加法:add eax, ebx(大小写均可)。"
+answer_md = """
+原程序第三条 `sub eax, ebx` 把 10-20 = -10(0xFFFFFFFFFFFFFFF6)存进了内存。
+正确写法:`add eax, ebx`(或 `add rax, rbx`)。
+修复后 [0x400100] = 30 = 0x1E,退出码 30。
+"""
+
+[fill_blank]
+hole_hint = "原程序把 10+20 误写成 sub eax, ebx;在 ?? 处填入正确的加法指令"
+asm_template = """[bits 64]
+org 0x400000
+mov eax, 10
+mov ebx, 20
+??
+mov [0x400100], rax
+mov rax, 60
+mov edi, 30
+syscall
+"""
+
+[[fill_blank.testcases]]
+expect_exit_code = 30
+expect_mem = { addr = "0x400100", qword_le = "0x1e" }

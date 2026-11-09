@@ -1,0 +1,42 @@
+# 习题:syscall 返回值(阶段八)
+
+[exercise]
+id = "stage08-q01-predict-write"
+type = "predict"
+title = "预测:write(fd=2, 5 字节) 的返回值"
+stage = 8
+lesson = "stage08-lesson01"
+knowledge = ["syscall", "linux-abi", "write"]
+difficulty = 2
+related_experiment = "stage08-lesson01"
+
+hints.level1 = "write 的返回值 = 实际写入的字节数(桩如实返回 len)。"
+hints.level2 = "RDX=5 → 返回 5;程序把它存进 RBX 再退出,不会被 exit 覆盖。"
+
+[predict]
+exec = "run"
+asm = """
+[bits 64]
+org 0x400000
+mov     rax, 1
+mov     rdi, 2
+lea     rsi, [msg]
+mov     rdx, 5
+syscall
+mov     rbx, rax
+mov     rax, 60
+mov     edi, 5
+syscall
+align 512
+msg: db "hello kernel!", 10
+"""
+
+[[predict.questions]]
+key = "RBX"
+prompt = "程序退出时,RBX = write 的返回值 = ?(十进制)"
+expect_kind = "reg:RBX"
+
+[[predict.questions]]
+key = "RDI"
+prompt = "退出时 RDI = ?(提示:exit 的退出码)"
+expect_kind = "reg:RDI"

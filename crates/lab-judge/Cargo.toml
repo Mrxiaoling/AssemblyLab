@@ -1,0 +1,12 @@
+[package]
+name = "lab-judge"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lab-core.workspace = true
+lab-engine.workspace = true
+lab-adapters.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true

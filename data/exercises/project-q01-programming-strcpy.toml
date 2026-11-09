@@ -1,0 +1,80 @@
+# 习题:综合编程 strcpy(综合项目)
+
+[exercise]
+id = "project-q01-programming-strcpy"
+type = "programming"
+title = "综合项目练习:实现 strcpy(逐字节复制到 0)"
+stage = 10
+lesson = "project-lesson01"
+knowledge = ["pointer", "indirect-addressing", "loop-pattern", "memory-write"]
+difficulty = 5
+related_experiment = "stage03-lesson01"
+
+hints.level1 = "循环体:读 [rdi+rax] 存进 [rsi+rax],等于 0 跳出(别忘了把 0 也复制)。"
+hints.level2 = "?? 处:test cl, cl 之后 jz .done(cl 是刚复制的字节,为 0 即到结尾)。参考解析有完整实现。"
+answer_md = """
+完整参考实现:
+
+```asm
+[bits 64]
+org 0x400000
+; rdi=源, rsi=目标(判题用例预置);复制到 0 为止(含 0)
+mov rax, 0
+.loop:
+    mov cl, [rdi + rax]
+    mov [rsi + rax], cl
+    test cl, cl
+    jz .done
+    inc rax
+    jmp .loop
+.done:
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+align 512
+src: db "anatomy", 0
+dst: times 16 db 0xCC     ; 用 0xCC 填充:验证"复制到 0 含 0"的边界
+```
+
+判题:dst 起点 0x400210,断言复制后的前 8 字节(小端读出即 "anatomy"+0)。
+`??` 只挖判断一条;完整循环在参考实现里——先自己写再对照。
+"""
+
+[fill_blank]
+hole_hint = "一条指令:刚复制的字节为 0 时跳出循环(test cl, cl 之后)"
+asm_template = """[bits 64]
+org 0x400000
+mov rax, 0
+.loop:
+mov cl, [rdi + rax]
+mov [rsi + rax], cl
+test cl, cl
+??
+inc rax
+jmp .loop
+.done:
+mov rax, 60
+mov edi, 0
+syscall
+align 512
+src: db "anatomy", 0
+dst: times 16 db 0xCC
+"""
+
+# 布局:代码 ~40 字节,align 512 → src=0x400200("anatomy"+0 共 8 字节),dst=0x400208
+[[fill_blank.testcases]]
+init_regs = [
+  { name = "RDI", value = "0x400200" },
+  { name = "RSI", value = "0x400208" },
+]
+expect_exit_code = 0
+expect_mem = { addr = "0x400208", qword_le = "0x00796d6f74616e61" }
+
+[[fill_blank.testcases]]
+init_regs = [
+  { name = "RDI", value = "0x400203" },
+  { name = "RSI", value = "0x400208" },
+]
+expect_exit_code = 0
+expect_mem = { addr = "0x400208", qword_le = "0xcccccc00796d6f74" }

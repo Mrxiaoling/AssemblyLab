@@ -1,0 +1,585 @@
+# 知识图谱节点数据(P7)。边由课程/习题的 knowledge 标签共现推导(>=2 次)。
+
+[[node]]
+id = "aapcs64"
+title = "AAPCS64"
+stage = 10
+related = ["link-register", "recursion"]
+
+[[node]]
+id = "aarch64-registers"
+title = "AArch64 寄存器"
+stage = 10
+
+[[node]]
+id = "abi-sysv"
+title = "SysV ABI"
+stage = 4
+
+[[node]]
+id = "acquire-release"
+title = "获取/释放"
+stage = 9
+
+[[node]]
+id = "add"
+title = "ADD 加法"
+stage = 1
+related = ["mov", "registers"]
+
+[[node]]
+id = "addressing-formula"
+title = "寻址公式"
+stage = 3
+
+[[node]]
+id = "adds"
+title = "ADDS 置标志"
+stage = 10
+
+[[node]]
+id = "alignment-padding"
+title = "对齐填充"
+stage = 3
+
+[[node]]
+id = "array"
+title = "数组"
+stage = 3
+related = ["index-scale", "loop-pattern"]
+
+[[node]]
+id = "async-cost-model"
+title = "async 成本模型"
+stage = 8
+
+[[node]]
+id = "auto-vectorization"
+title = "自动向量化"
+stage = 9
+
+[[node]]
+id = "await-ready"
+title = "await_ready"
+stage = 7
+
+[[node]]
+id = "await-resume"
+title = "await_resume"
+stage = 7
+
+[[node]]
+id = "await-suspend"
+title = "await_suspend"
+stage = 7
+
+[[node]]
+id = "awaiter"
+title = "awaiter"
+stage = 7
+
+[[node]]
+id = "call-ret"
+title = "CALL/RET"
+stage = 4
+related = ["recursion", "stack-frame"]
+
+[[node]]
+id = "callee-saved"
+title = "callee-saved"
+stage = 8
+
+[[node]]
+id = "caller-callee-saved"
+title = "调用者/被调者保存"
+stage = 4
+
+[[node]]
+id = "capture-by-reference"
+title = "按引用捕获"
+stage = 6
+
+[[node]]
+id = "capture-by-value"
+title = "按值捕获"
+stage = 6
+
+[[node]]
+id = "cas"
+title = "CAS"
+stage = 9
+related = ["lock-prefix"]
+
+[[node]]
+id = "cmpxchg"
+title = "CMPXCHG 比较交换"
+stage = 9
+
+[[node]]
+id = "co-yield"
+title = "co_yield"
+stage = 7
+
+[[node]]
+id = "condition-codes"
+title = "条件码"
+stage = 10
+
+[[node]]
+id = "constant-folding"
+title = "常量折叠"
+stage = 5
+
+[[node]]
+id = "context-switch"
+title = "上下文切换"
+stage = 8
+
+[[node]]
+id = "context-switch-taxonomy"
+title = "四类切换"
+stage = 8
+
+[[node]]
+id = "coroutine-frame"
+title = "协程帧"
+stage = 7
+
+[[node]]
+id = "coroutine-handle"
+title = "coroutine_handle"
+stage = 7
+
+[[node]]
+id = "coroutine-lifetime"
+title = "协程生命周期"
+stage = 7
+
+[[node]]
+id = "cr3"
+title = "CR3"
+stage = 8
+
+[[node]]
+id = "ctor-virtual-trap"
+title = "构造期虚调用陷阱"
+stage = 6
+
+[[node]]
+id = "dangling-capture"
+title = "悬垂捕获"
+stage = 6
+
+[[node]]
+id = "data-endianness"
+title = "端序观察"
+stage = 3
+
+[[node]]
+id = "dce"
+title = "死代码消除"
+stage = 5
+
+[[node]]
+id = "devirtualization"
+title = "去虚化"
+stage = 6
+
+[[node]]
+id = "dmb"
+title = "dmb"
+stage = 9
+
+[[node]]
+id = "el0-el1"
+title = "EL0/EL1"
+stage = 8
+
+[[node]]
+id = "endianness"
+title = "端序"
+stage = 3
+
+[[node]]
+id = "exception-vector"
+title = "异常向量表"
+stage = 8
+
+[[node]]
+id = "false-sharing"
+title = "伪共享"
+stage = 9
+
+[[node]]
+id = "flags"
+title = "标志寄存器"
+stage = 2
+
+[[node]]
+id = "flags-cf"
+title = "CF 进位"
+stage = 2
+related = ["flags-of", "flags-zf", "sub"]
+
+[[node]]
+id = "flags-of"
+title = "OF 溢出"
+stage = 2
+related = ["flags-cf", "flags-zf", "sub"]
+
+[[node]]
+id = "flags-zf"
+title = "ZF 零标志"
+stage = 2
+related = ["flags-cf", "flags-of", "sub"]
+
+[[node]]
+id = "float-reinterpret"
+title = "浮点重解释"
+stage = 3
+
+[[node]]
+id = "frame-promotion"
+title = "变量提升进帧"
+stage = 7
+
+[[node]]
+id = "futex"
+title = "futex"
+stage = 9
+
+[[node]]
+id = "halo"
+title = "HALO 堆分配省略"
+stage = 7
+
+[[node]]
+id = "handle-destroy"
+title = "handle.destroy"
+stage = 7
+
+[[node]]
+id = "index-scale"
+title = "下标 scale"
+stage = 3
+related = ["array", "loop-pattern"]
+
+[[node]]
+id = "indirect-addressing"
+title = "间接寻址"
+stage = 3
+
+[[node]]
+id = "inlining"
+title = "内联"
+stage = 5
+
+[[node]]
+id = "isa-comparison"
+title = "ISA 对比"
+stage = 10
+
+[[node]]
+id = "lambda-closure"
+title = "lambda 闭包"
+stage = 6
+
+[[node]]
+id = "lane-semantics"
+title = "lane 语义"
+stage = 9
+
+[[node]]
+id = "lea"
+title = "LEA 取地址"
+stage = 3
+
+[[node]]
+id = "link-register"
+title = "X30 链接寄存器"
+stage = 10
+related = ["aapcs64", "recursion"]
+
+[[node]]
+id = "linux-abi"
+title = "Linux ABI"
+stage = 8
+related = ["syscall"]
+
+[[node]]
+id = "linux-arm64-abi"
+title = "Linux ARM64 ABI"
+stage = 8
+
+[[node]]
+id = "little-endian"
+title = "小端"
+stage = 3
+
+[[node]]
+id = "ll-sc"
+title = "LL/SC"
+stage = 9
+
+[[node]]
+id = "lock-prefix"
+title = "lock 前缀"
+stage = 9
+related = ["cas"]
+
+[[node]]
+id = "loop-pattern"
+title = "循环模式"
+stage = 3
+related = ["array", "index-scale"]
+
+[[node]]
+id = "lse-atomics"
+title = "LSE 原子扩展"
+stage = 9
+
+[[node]]
+id = "member-function"
+title = "成员函数"
+stage = 6
+
+[[node]]
+id = "memory-model"
+title = "内存模型"
+stage = 9
+
+[[node]]
+id = "memory-vs-register"
+title = "内存与寄存器"
+stage = 1
+
+[[node]]
+id = "memory-write"
+title = "内存写入"
+stage = 1
+
+[[node]]
+id = "mov"
+title = "MOV 数据搬运"
+stage = 1
+related = ["add", "registers"]
+
+[[node]]
+id = "neg"
+title = "NEG 取负"
+stage = 2
+
+[[node]]
+id = "neon-basics"
+title = "NEON 基础"
+stage = 9
+
+[[node]]
+id = "neon-vs-sse"
+title = "NEON vs SSE"
+stage = 10
+
+[[node]]
+id = "network-byte-order"
+title = "网络字节序"
+stage = 3
+
+[[node]]
+id = "offsetof"
+title = "offsetof"
+stage = 3
+
+[[node]]
+id = "operator-call"
+title = "operator()"
+stage = 6
+
+[[node]]
+id = "optimization-levels"
+title = "优化级别"
+stage = 5
+
+[[node]]
+id = "pointer"
+title = "指针"
+stage = 3
+
+[[node]]
+id = "pointer-arithmetic"
+title = "指针算术"
+stage = 3
+
+[[node]]
+id = "prepost-index"
+title = "前后索引寻址"
+stage = 10
+
+[[node]]
+id = "promise-type"
+title = "promise_type"
+stage = 7
+
+[[node]]
+id = "raii-across-suspend"
+title = "RAII 跨挂起点"
+stage = 7
+
+[[node]]
+id = "recursion"
+title = "递归"
+stage = 4
+related = ["aapcs64", "call-ret", "link-register", "stack-frame"]
+
+[[node]]
+id = "registers"
+title = "寄存器体系"
+stage = 1
+related = ["add", "mov"]
+
+[[node]]
+id = "rip"
+title = "RIP 指令指针"
+stage = 1
+
+[[node]]
+id = "scheduler"
+title = "调度器"
+stage = 8
+
+[[node]]
+id = "scheduler-queue"
+title = "调度队列"
+stage = 8
+
+[[node]]
+id = "shifted-operand"
+title = "移位操作数"
+stage = 10
+
+[[node]]
+id = "signed-unsigned"
+title = "有符号/无符号"
+stage = 2
+
+[[node]]
+id = "spinlock"
+title = "自旋锁"
+stage = 9
+
+[[node]]
+id = "sse-basics"
+title = "SSE 基础"
+stage = 9
+
+[[node]]
+id = "stack-frame"
+title = "栈帧"
+stage = 4
+related = ["call-ret", "recursion"]
+
+[[node]]
+id = "stack-overflow"
+title = "栈溢出"
+stage = 4
+
+[[node]]
+id = "stlxr"
+title = "stlxr"
+stage = 10
+
+[[node]]
+id = "stp-ldp"
+title = "STP/LDP"
+stage = 10
+
+[[node]]
+id = "strace"
+title = "strace"
+stage = 8
+
+[[node]]
+id = "struct-layout"
+title = "结构体布局"
+stage = 3
+
+[[node]]
+id = "sub"
+title = "SUB 减法"
+stage = 2
+related = ["flags-cf", "flags-of", "flags-zf"]
+
+[[node]]
+id = "subregisters"
+title = "子寄存器"
+stage = 2
+
+[[node]]
+id = "svc"
+title = "SVC"
+stage = 8
+
+[[node]]
+id = "swapcontext"
+title = "swapcontext"
+stage = 8
+
+[[node]]
+id = "syscall"
+title = "syscall"
+stage = 8
+related = ["linux-abi"]
+
+[[node]]
+id = "tail-call"
+title = "尾调用"
+stage = 4
+
+[[node]]
+id = "this-pointer"
+title = "this 指针"
+stage = 6
+
+[[node]]
+id = "type-punning"
+title = "类型双关"
+stage = 3
+
+[[node]]
+id = "user-kernel-boundary"
+title = "用户态/内核态"
+stage = 8
+
+[[node]]
+id = "virtual-function"
+title = "虚函数"
+stage = 6
+
+[[node]]
+id = "volatile"
+title = "volatile"
+stage = 5
+
+[[node]]
+id = "vptr"
+title = "vptr"
+stage = 6
+
+[[node]]
+id = "vtable"
+title = "虚表"
+stage = 6
+
+[[node]]
+id = "write"
+title = "write 系统调用"
+stage = 8
+
+[[node]]
+id = "xor"
+title = "XOR"
+stage = 2
+
+[[node]]
+id = "zero-extend"
+title = "零扩展"
+stage = 2

@@ -1,0 +1,80 @@
+# 习题:综合编程 strlen(阶段三,8 题型 ⑦)
+
+[exercise]
+id = "stage03-q05-programming-strlen"
+type = "programming"
+title = "编程:实现 strlen(以 0 结尾的字符串长度)"
+stage = 3
+lesson = "stage03-lesson02"
+knowledge = ["pointer", "indirect-addressing", "loop-pattern"]
+difficulty = 4
+related_experiment = "stage03-lesson01"
+
+hints.level1 = "循环:cmp byte [rdi+rax], 0;等于就跳出(条件跳转),否则 rax+1 继续。"
+hints.level2 = "?? 处填:je .done(到 0 就结束)。movzx ecx, byte [rdi+rax] 读字符;cmp/jne 也算对——只要三组用例都过。"
+answer_md = """
+完整参考实现:
+
+```asm
+[bits 64]
+org 0x400000
+; rdi = 字符串地址(用例预置),返回长度存 [0x400100]
+mov rax, 0
+.loop:
+    cmp byte [rdi + rax], 0
+    je .done
+    inc rax
+    jmp .loop
+.done:
+    mov [0x400100], rax
+    mov rax, 60
+    mov edi, 0
+    syscall
+
+align 512
+s1: db "assembly", 0     ; len 8
+s2: db "x", 0            ; len 1
+s3: db 0                 ; len 0(空串边界)
+```
+
+判题三组:rdi 分别指向三个字符串(含空串),断言 [0x400100] 与退出码。
+循环里 `cmp/jne + jmp` 或 `movzx+test` 等等价写法都能过——判题以行为为准。
+"""
+
+[fill_blank]
+hole_hint = "一条指令:读到 0(字符串结尾)时跳出循环(条件跳转到 .done)"
+asm_template = """[bits 64]
+org 0x400000
+mov rax, 0
+.loop:
+cmp byte [rdi + rax], 0
+??
+inc rax
+jmp .loop
+.done:
+mov [0x400100], rax
+mov rax, 60
+mov edi, 0
+syscall
+align 512
+s1: db "assembly", 0
+s2: db "x", 0
+s3: db 0
+"""
+
+# 数据区地址(align 512 后固定):s1=0x400200("assembly"+NUL 共 9 字节)
+# s2=0x400209("x"+NUL)、s3=0x40020b(空串)
+[[fill_blank.testcases]]
+init_regs = [{ name = "RDI", value = "0x400200" }]
+expect_exit_code = 0
+expect_mem = { addr = "0x400100", qword_le = "0x8" }
+
+[[fill_blank.testcases]]
+init_regs = [{ name = "RDI", value = "0x400209" }]
+expect_exit_code = 0
+expect_mem = { addr = "0x400100", qword_le = "0x1" }
+
+[[fill_blank.testcases]]
+init_regs = [{ name = "RDI", value = "0x40020b" }]
+expect_exit_code = 0
+expect_mem = { addr = "0x400100", qword_le = "0x0" }

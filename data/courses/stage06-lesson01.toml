@@ -1,0 +1,142 @@
+# L6.1 — 阶段六:this 与成员函数(C++ 对象模型 ①)
+
+[lesson]
+id = "stage06-lesson01"
+title = "this 的真身:隐藏的第一个参数"
+stage = 6
+requires = ["stage04-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "v.sum() 和 sum(&v) 是同一个东西吗?"
+outcomes = ["在真机调试中看到 this=RDI 传入", "理解成员访问 = [this+offsetof]", "破除'成员函数存在对象里'的错觉"]
+
+[lesson.experiment]
+mode = "debug"
+isa = "x86-64"
+source = '''struct Vec {
+    int x;
+    int y;
+    int sum();
+};
+
+int Vec::sum() {
+    return x + y;
+}
+
+int main() {
+    Vec v{3, 4};
+    int r = v.sum();
+    return r;
+}
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+`v.sum()` 里,sum 函数怎么知道要加的是**这个 v** 的 x、y?
+
+C++ 的答案:`v.sum()` 在底层就是 `Vec_sum(&v)`——
+**this 是一个隐藏的、排在参数表第一位的指针**。
+成员函数的代码在内存里只有一份,和普通函数没有区别。
+"""
+
+[[steps]]
+kind = "run"
+title = "真机调试:断进 sum"
+content = """
+点「打开本课实验」进入真机调试页,点「编译并启动调试」。
+在 `return x + y;`(第 9 行)行号上点一下设断点,点「▶ 继续」——程序断在 sum 内。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "看 RDI:this 到了"
+content = """
+断在 sum 内,看右侧寄存器:**RDI = &v**(一个栈地址)。
+SysV 约定第一参数走 RDI——这个"第一参数"就是 this。
+
+再看编译产物反汇编里 sum 的函数体:
+
+```
+mov  eax, [rdi]        ; this->x
+add  eax, [rdi+4]      ; this->y
+```
+
+成员访问就是 `[this + offsetof]`——阶段三的结构体知识原样适用。
+"""
+
+[[steps]]
+kind = "state"
+title = "对照:main 里的 v"
+content = """
+在「调用栈与变量」面板切回 main 帧,看变量 v 的地址(点 sum 帧的 this 值),
+内存面板输入该地址、int32 视图:3 和 4 两个成员并排躺在栈上。
+对象 = 一块按布局排好的内存,仅此而已。
+"""
+
+[[steps]]
+kind = "theory"
+title = "为什么说成员函数'不在对象里'"
+content = """
+sizeof(Vec) == 8(两个 int),**没有任何字节属于 sum 的代码或函数指针**。
+对象只存数据;函数代码全局一份,靠 this 区分操作谁。
+这也解释了:把一个对象 memcpy 到别处后,成员函数照常工作——它根本没依赖对象里的"函数槽"。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+int r1 = v.sum();        // Vec::sum(&v)
+int (Vec::*fp)() = &Vec::sum;
+int r2 = (v.*fp)();      // 同样传 &v —— 成员函数指针本质是带 this 的函数指针
+```
+`static` 成员函数没有 this:所以 `v.static_fn()` 合法但拿不到成员——
+它就是个穿了类名外套的普通函数。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "每个对象都带一份成员函数副本" —— 代码全局一份
+- ❌ "this 是特殊魔法" —— 就是 RDI 里的一个普通地址
+- ❌ "成员函数比自由函数慢" —— 一样;this 只是一个参数
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:验证 this"
+content = """
+在 main 的 `Vec v{3,4};` 后加 `Vec w{30,40}; int r2 = w.sum();`,
+重开调试并断进第二个调用——RDI 变成 w 的地址,
+反汇编代码一字未变。**代码不变,数据指针变,这就是 this。**
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:断在 sum 内时 RDI 指向的内存内容(int32 视图)。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- v.sum() ≡ Vec_sum(&v);this = 隐藏第一参数(RDI)
+- 成员访问 = [this+offsetof];对象只存数据
+- static 成员函数 = 无 this 的普通函数
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["this-pointer", "member-function", "struct-layout", "abi-sysv"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "虚函数与虚表:第一次在对象里看到'指针'。"

@@ -1,0 +1,36 @@
+# 习题:原理解释(阶段五,8 题型 ⑧)
+
+[exercise]
+id = "stage05-q04-explain-asif"
+type = "explain"
+title = "解释:为什么编译器敢删你的代码(as-if 规则)"
+stage = 5
+lesson = "stage05-lesson01"
+knowledge = ["optimization-levels", "dce", "inlining", "volatile"]
+difficulty = 3
+related_experiment = "stage05-lesson01"
+
+hints.level1 = "唯一许可证是可观察行为不变;想一想什么才算可观察。"
+hints.level2 = "as-if:只要程序对外表现一致,任意改写合法;volatile 是用户声明的可观察点。"
+answer_md = """
+**as-if 规则**:编译器可以任意改写程序,唯一约束是可观察行为(as-if 该原始程序写出的一样)。
+
+可观察行为 = 对外界的 IO(write)、volatile 访问、程序终止状态等。
+而"变量存在栈里""函数真的被调用"都不在可观察集合里——所以:
+- 变量可进寄存器甚至消失(调试器看不见它,但程序行为不变)
+- 死代码可删(不影响可观察行为)
+- 纯函数可内联/常量折叠
+
+volatile 的意义 = 用户显式声明"这个访问是可观察的"——它就不可省了。
+这也是"release 崩 debug 不崩=有 UB"的根源:UB 没有行为可保护,优化器按假设改写。
+"""
+
+[self_check]
+display = "主题:编译器优化的边界(as-if 规则)——阅读参考解析后逐条确认。"
+items = [
+    "我能说出 as-if 规则的唯一约束:可观察行为不变",
+    "我能列举至少三种可观察行为:IO、volatile 访问、终止状态",
+    "我能解释为什么调试器在 -O2 下找不到变量",
+    "我能解释 volatile 挡住了哪些优化",
+    "我能说出 UB 与优化的关系:未定义行为不受 as-if 保护",
+]

@@ -1,0 +1,49 @@
+# 习题:递归预测(阶段四)
+
+[exercise]
+id = "stage04-q03-predict-factorial"
+type = "predict"
+title = "预测:递归 factorial(5) 的返回值"
+stage = 4
+lesson = "stage04-lesson02"
+knowledge = ["recursion", "stack-frame", "call-ret"]
+difficulty = 3
+related_experiment = "stage04-lesson02"
+
+hints.level1 = "fact 把返回值留在 eax;程序在退出前先把 eax 转存进 ebx(否则会被 exit 覆盖)。"
+hints.level2 = "5! = 120 = 0x78。"
+
+[predict]
+exec = "run"
+asm = '''
+[bits 64]
+org 0x400000
+mov edi, 5
+call fact
+mov ebx, eax
+mov rax, 60
+mov edi, 0
+syscall
+fact:
+cmp edi, 1
+jle .base
+push rdi
+dec edi
+call fact
+pop rdi
+imul eax, edi
+ret
+.base:
+mov eax, 1
+ret
+'''
+
+[[predict.questions]]
+key = "RBX"
+prompt = "程序跑到退出时,RBX = fact(5) 的返回值 = ?(十进制或 0x…)"
+expect_kind = "reg:RBX"
+
+[[predict.questions]]
+key = "RDI"
+prompt = "退出时 RDI = ?(提示:最后被 syscall 前的 mov 覆盖)"
+expect_kind = "reg:RDI"

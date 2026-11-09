@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lab-core",
+    "crates/lab-adapters",
+    "crates/lab-engine",
+    "crates/lab-api",
+    "crates/lab-storage",
+    "crates/lab-judge",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+hex = "0.4"
+tracing = "0.1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+utoipa = { version = "5", features = ["axum_extras"] }
+iced-x86 = "1.22"
+
+lab-core = { path = "crates/lab-core" }
+lab-adapters = { path = "crates/lab-adapters" }
+lab-engine = { path = "crates/lab-engine" }
+lab-storage = { path = "crates/lab-storage" }
+lab-judge = { path = "crates/lab-judge" }
+
+[profile.dev]
+opt-level = 1

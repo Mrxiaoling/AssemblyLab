@@ -1,0 +1,35 @@
+# Rust
+target/
+**/target/
+
+# Node
+node_modules/
+web/dist/
+
+# 本地数据与密钥
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
+
+# spike 构建产物与第三方二进制(来源与验证见 spikes/unicorn_step_diff/RESULT.md)
+spikes/**/target/
+spikes/**/vendor/dl/
+spikes/**/vendor/pypi/
+spikes/**/vendor/pypi-extracted/
+*.dll
+!vendor/unicorn.dll
+*.lib
+*.7z
+*.whl
+*.pyd
+
+# IDE
+.vscode/
+.idea/
+
+# 运行时日志与会话产物(本地生成,不入库)
+*.log
+.zcode/
+!vendor/unicorn.dll

@@ -1,0 +1,130 @@
+# L4 — 阶段四:追踪一次完整的函数调用(真机调试)
+
+[lesson]
+id = "stage04-lesson01"
+title = "追踪一次完整的函数调用:CALL 到底做了什么"
+stage = 4
+requires = ["stage02-lesson02"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "C++ 的函数调用在 CPU 层面是哪几条指令?参数怎么传?返回值去哪了?"
+outcomes = ["看懂 call/ret 与栈的配合", "理解 SysV 参数寄存器(RDI/RSI)", "会用真机调试器单步观察调用"]
+
+[lesson.experiment]
+mode = "debug"
+isa = "x86-64"
+source = '''
+int add(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    int r = add(10, 20);
+    return r;
+}
+'''
+watch = ["RDI", "RSI", "RAX", "RSP"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+`int r = add(10, 20);` 这一行,编译器生成了什么?参数 10 和 20 放在哪?
+`add` 怎么拿到它们?返回值怎么回到 `r`?
+
+本节用**真机调试器**(gdb + 真实 g++ 编译)逐条指令追踪一次完整调用。
+"""
+
+[[steps]]
+kind = "run"
+title = "真机调试:断在 main 入口"
+content = """
+打开「真机调试」页面,点「编译并启动调试」——调试器自动断在 main 入口。
+右侧编译产物反汇编面板里找到 `call <add...>`:这就是函数调用的机器形态。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "逐条观察:参数寄存器"
+content = """
+在 `call` 之前,你会看到两条指令:
+
+```
+mov  esi,0x14    ; 第 2 个参数 20 → RSI
+mov  edi,0xa     ; 第 1 个参数 10 → RDI
+```
+
+这就是 **System V AMD64 调用约定**:前 6 个整数参数依次走 RDI、RSI、RDX、RCX、R8、R9。
+进入 add 后,`mov DWORD PTR [rbp-0x4],edi` 把参数搬进栈——参数"传递"的本质就是寄存器赋值。
+"""
+
+[[steps]]
+kind = "state"
+title = "call 与栈"
+content = """
+单步跨过 `call` 指令,观察 RSP:它减了 8——**返回地址被压栈了**。
+add 的 `ret` 从栈顶弹回地址,CPU 回到 main 里 call 的下一条。
+`push rbp / mov rbp,rsp` 是 add 的**函数序言**,为自己建立栈帧。
+"""
+
+[[steps]]
+kind = "theory"
+title = "调用约定的意义"
+content = """
+调用约定是**编译器之间的协议**:调用方保证参数在约定寄存器、返回值放 RAX、
+哪些寄存器可以随便用(caller-saved)、哪些必须保存恢复(callee-saved)。
+没有这个协议,每个函数都要猜参数在哪。
+
+同一份 C++ 在 Windows 上编译,参数走 RCX/RDX——这就是阶段四后期实验的对比内容。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `add(10, 20)` → 参数装进 RDI/RSI 的两条 mov
+- `return a + b` → `add eax,edx` + `mov eax` 到返回值
+- 内联(-O2)后整个 add 可能消失——调用不是免费的,但编译器会尽力省略它
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "函数调用是把参数压栈" —— SysV 下前 6 个整数参数走寄存器;压栈是第 7 个开始的
+- ❌ "call 会保存所有寄存器" —— call 只压返回地址;保存寄存器是被调方的责任(callee-saved)
+- ❌ "ret 能回到任何地方" —— ret 只信栈顶;栈被写坏就跳到任意地址(缓冲区溢出攻击的根源)
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:在真机上改参数"
+content = """
+在真机调试页面把 `add(10, 20)` 改成 `add(100, 200)`,重新编译启动,
+单步到 add 内,观察 RDI=0x64、RSI=0xc8——你的修改忠实地出现在寄存器里。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "配套真机预测题:断在 add 入口时 RDI/RSI 的值。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- call = 压返回地址 + 跳转;ret = 弹回
+- SysV:参数 RDI/RSI/RDX/RCX/R8/R9,返回值 RAX
+- 函数序言建立栈帧;调用约定是编译器间的协议
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["call-ret", "abi-sysv", "stack-frame", "caller-callee-saved"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "递归与栈帧动画、SysV vs Win64 对比(Phase 3 深化)。"

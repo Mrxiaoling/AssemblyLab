@@ -1,0 +1,13 @@
+[package]
+name = "lab-adapters"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lab-core.workspace = true
+iced-x86.workspace = true
+hex.workspace = true
+tracing.workspace = true
+serde.workspace = true
+yaxpeax-arm = "0.5.0"
+yaxpeax-arch = "0.3.3"

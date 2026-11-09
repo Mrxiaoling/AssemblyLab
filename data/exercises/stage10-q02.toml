@@ -1,0 +1,53 @@
+# 习题:ARM64 递归(阶段十)
+
+[exercise]
+id = "stage10-q02-predict-fact"
+type = "predict"
+title = "预测:ARM64 递归 factorial(4) 的返回值"
+stage = 10
+lesson = "stage10-lesson02"
+isa = "arm64"
+knowledge = ["link-register", "recursion", "aapcs64"]
+difficulty = 3
+related_experiment = "stage10-lesson02"
+
+hints.level1 = "结果经 X19 转存(避免被退出路径覆盖);fact 返回值固定在 X0。"
+hints.level2 = "4! = 24 = 0x18。"
+
+[predict]
+exec = "run"
+asm = '''
+.global _start
+_start:
+    mov     x0, #4
+    bl      fact
+    mov     x19, x0
+    mov     x8, #93
+    mov     x0, #0
+    svc     #0
+
+fact:
+    cmp     x0, #1
+    b.le    base
+    stp     x29, x30, [sp, #-16]!
+    stp     x0, xzr, [sp, #-16]!
+    sub     x0, x0, #1
+    bl      fact
+    ldp     x1, xzr, [sp], #16
+    mul     x0, x0, x1
+    ldp     x29, x30, [sp], #16
+    ret
+base:
+    mov     x0, #1
+    ret
+'''
+
+[[predict.questions]]
+key = "X19"
+prompt = "程序跑到退出时,X19 = fact(4) 的返回值 = ?(十进制或 0x…)"
+expect_kind = "reg:X19"
+
+[[predict.questions]]
+key = "X1"
+prompt = "退出时 X1 = ?(提示:最后一次 ldp 取回的是最先压入的 n——栈是 LIFO)"
+expect_kind = "reg:X1"

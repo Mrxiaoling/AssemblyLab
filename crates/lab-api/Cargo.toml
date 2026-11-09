@@ -1,0 +1,24 @@
+[package]
+name = "lab-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "assemblylab"
+path = "src/main.rs"
+
+[dependencies]
+lab-core.workspace = true
+lab-adapters.workspace = true
+lab-engine.workspace = true
+lab-storage.workspace = true
+lab-judge.workspace = true
+toml.workspace = true
+axum.workspace = true
+tokio.workspace = true
+utoipa.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hex.workspace = true

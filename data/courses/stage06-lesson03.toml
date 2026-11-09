@@ -1,0 +1,149 @@
+# L6.3 — 阶段六:lambda 闭包(C++ 对象模型 ③)
+
+[lesson]
+id = "stage06-lesson03"
+title = "lambda 闭包:捕获就是匿名结构体的成员"
+stage = 6
+requires = ["stage06-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "[base](int x){ return x + base; } 捕获的 base 存在哪?调用时怎么找到它?"
+outcomes = ["理解闭包 = 匿名类型对象 + operator()", "按值/按引用捕获的机器差异", "看清捕获生命周期陷阱"]
+
+[lesson.experiment]
+mode = "debug"
+isa = "x86-64"
+source = '''struct Adder {
+    int base;
+    int operator()(int x) const { return x + base; }
+};
+
+int main() {
+    int base = 10;
+    Adder adder{base};        // 编译器为 lambda 生成的就是这个形状
+    int r = adder(5);
+    return r;
+}
+
+// 等价的 lambda(改完可替换 main 体验):
+//   int base = 10;
+//   auto f = [base](int x) { return x + base; };
+//   int r = f(5);
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+```cpp
+int base = 10;
+auto f = [base](int x) { return x + base; };
+int r = f(5);   // 15
+```
+lambda 不是函数指针——它**捕获**了局部变量 base。
+捕获的东西存在哪?f 又是什么类型?
+
+答案:C++ 为每个 lambda 生成一个**独一无二的匿名结构体**,
+捕获的变量是它的成员,函数体是它的 `operator()`。
+本课源码区把这个匿名结构体**手动写了出来**(Adder)——两者在机器层面不可区分。
+"""
+
+[[steps]]
+kind = "run"
+title = "真机调试:断进 operator()"
+content = """
+点「打开本课实验」,「编译并启动调试」。
+在 `return x + base;`(第 3 行)设断点,「▶ 继续」断进去。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "RDI 再次登场"
+content = """
+断在 operator() 内:
+- RDI = &adder(this,又见上一课)—— **闭包对象就是第一个参数**
+- 反汇编:`mov eax, esi`(x)+ `add eax, [rdi]`(this->base)
+  或类似 `mov eax,[rdi]` 先取 base 再加 esi
+
+**f(5) ≡ Adder::operator()(&adder, 5)**。
+按值捕获 = 把 base 的值**拷贝进闭包对象**;调用时通过 this 读取,与 base 本体再无关系。
+"""
+
+[[steps]]
+kind = "state"
+title = "按引用捕获的差异"
+content = """
+把源码改成 `auto f = [&base](int x) { ... };` 重开调试:
+反汇编里 base 的读取从 `[rdi]`(拷贝成员)变成
+`mov rax,[rdi]; mov eax,[rax]`(**指针成员 → 二次解引用**)。
+
+按引用捕获的闭包对象里存的是 **base 的地址**:
+- 优点:不拷贝、可回写原变量
+- 陷阱:base 死后闭包还活着 → **悬垂引用**(async/回调最常见崩溃来源)
+"""
+
+[[steps]]
+kind = "theory"
+title = "闭包的类型与大小"
+content = """
+- 每个 lambda 表达式 = 编译器现场生成的新类型(哪怕两处代码一模一样,类型也不同)
+- sizeof(闭包) = 成员(捕获)大小之和(引用捕获 = 指针 8 字节)
+- 无捕获 lambda 可**隐式转函数指针**(没有 this,签名干净)——所以才能传给 C 的 qsort
+- mutable:让 operator() 的 this 不带 const(才能修改按值捕获的副本)
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+auto f = [base](int x) { return x + base; };
+struct __Lambda { int base; int operator()(int x) const { return x + base; } };
+```
+std::function、std::bind、协程,底层全是"存状态的匿名对象 + 调用接口"。
+理解了本课,协程帧(阶段七)只是多存了几个挂起点状态而已。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "lambda 是函数指针" —— 是对象;函数指针只是无捕获时的退化形态
+- ❌ "[=] 拷贝一切所以安全" —— 拷贝的是**指针的值**当成员是裸指针/引用时照样悬垂
+- ❌ "捕获列表省事就行" —— 每个捕获都是一次拷贝/指针;大对象按引用 + 生命周期想清楚
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:替换成真 lambda"
+content = """
+把 main 整体替换成注释里的 lambda 版本,重开调试断进 f:
+结构一模一样(RDI=闭包、成员读 base)。
+再把源码切到「优化对比」页看 -O2:**无捕获 lambda 直接被内联成一行加法**。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:按值捕获 int 的闭包,sizeof 是多少;断进 operator() 时 RDI 指向的内容。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- lambda = 匿名类型对象;捕获 = 成员;调用 = operator()(&闭包, args)
+- 按值捕获存副本,按引用捕获存指针(悬垂风险)
+- 无捕获 lambda 可转函数指针;优化后常被整体内联
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["lambda-closure", "capture-by-value", "capture-by-reference", "operator-call", "dangling-capture"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段七:C++20 协程帧——更复杂的'带状态可暂停函数'。"

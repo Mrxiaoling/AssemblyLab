@@ -1,0 +1,38 @@
+# 习题:ARM64 算术与标志(阶段十)
+
+[exercise]
+id = "stage10-q01-predict-adds"
+type = "predict"
+title = "预测:ARM64 adds 之后的 X4 与 NZCV"
+stage = 10
+lesson = "stage10-lesson01"
+isa = "arm64"
+knowledge = ["aarch64-registers", "adds", "shifted-operand"]
+difficulty = 3
+related_experiment = "stage10-lesson01"
+
+hints.level1 = "add x2, x0, x1, lsl #1 是 x0 + (x1<<1);adds 才置标志(0x7D 不产生进位/溢出)。"
+hints.level2 = "21 + (2<<1) = 25 → x2=0x19;25 + 100 = 125 = 0x7D;无符号与有符号都不越界 → NZCV 全 0。"
+
+[predict]
+exec = "step:5"
+asm = '''
+.global _start
+_start:
+    mov     x0, #21
+    mov     x1, #2
+    add     x2, x0, x1, lsl #1
+    mov     x3, #100
+    adds    x2, x2, x3
+    ret
+'''
+
+[[predict.questions]]
+key = "X2"
+prompt = "第 5 条(adds)执行完,X2 = ?(十进制或 0x…)"
+expect_kind = "reg:X2"
+
+[[predict.questions]]
+key = "NZCV"
+prompt = "同一时刻,NZCV 寄存器的原始值 = ?(提示:全 0 是多少)"
+expect_kind = "reg:NZCV"

@@ -1,0 +1,46 @@
+# 习题:标志位三连(阶段二)
+
+[exercise]
+id = "stage02-q01-predict-flags"
+type = "predict"
+title = "预测:溢出三连——CF/OF/ZF 会怎样?"
+stage = 2
+lesson = "stage02-lesson02"
+knowledge = ["flags-cf", "flags-of", "flags-zf", "sub"]
+difficulty = 3
+related_experiment = "stage02-lesson02"
+
+hints.level1 = "第三条:0x80000000 按有符号看是负数(-2^31),再减 1 会越过负边界。"
+hints.level2 = "sub eax,1 @ INT32_MIN:有符号下溢 → OF=1;无符号 0x80000000-1 无借位 → CF=0;结果非零 → ZF=0。"
+answer_md = """
+1. `sub eax,1`(1-1=0):ZF=1,CF=0,OF=0。
+2. `sub eax,1`(0-1):借位 → CF=1;有符号 -1 合法 → OF=0;ZF=0。
+3. `sub eax,1`(INT32_MIN-1):有符号下溢 → OF=1;无符号无借位 → CF=0;ZF=0。
+同一条指令,三种标志组合——"两种视角"的最好例证。
+"""
+common_mistakes = ["把 CF 和 OF 混为一谈", "认为 0-1 的 OF=1"]
+
+[predict]
+exec = "step:3"
+asm = '''
+[bits 64]
+org 0x400000
+mov eax, 1
+sub eax, 1
+sub eax, 1
+'''
+
+[[predict.questions]]
+key = "ZF"
+prompt = "第三条 sub 执行后,ZF?"
+expect_kind = "flag"
+
+[[predict.questions]]
+key = "CF"
+prompt = "第三条 sub 执行后,CF?"
+expect_kind = "flag"
+
+[[predict.questions]]
+key = "OF"
+prompt = "第三条 sub 执行后,OF?"
+expect_kind = "flag"

@@ -1,0 +1,109 @@
+# L2 — 阶段二:数据移动与寄存器(变量交换的三种实现)
+
+[lesson]
+id = "stage02-lesson01"
+title = "数据如何在寄存器与内存间移动"
+stage = 2
+requires = ["stage01-lesson01"]
+estimated_minutes = 40
+
+[lesson.goal]
+problem = "不借助第三个变量,能交换两个变量的值吗?"
+outcomes = ["掌握 MOV 与子寄存器写语义", "理解 XOR 交换及其陷阱", "对比三种交换实现的指令数"]
+
+[lesson.experiment]
+isa = "x86-64"
+source = '''
+[bits 64]
+org 0x400000
+global _start
+
+_start:
+    mov eax, 0x11      ; a
+    mov ebx, 0x22      ; b
+    ; ---- 经典三步交换(临时寄存器)----
+    mov ecx, eax       ; tmp = a
+    mov eax, ebx       ; a = b
+    mov ebx, ecx       ; b = tmp
+    mov rax, 60
+    mov edi, 0
+    syscall
+'''
+watch = ["RAX", "RBX", "RCX"]
+
+[[steps]]
+kind = "problem"
+title = "交换两个变量"
+content = """
+C++ 里交换两个 int 通常写 `std::swap(a, b)` 或手动引入 tmp。汇编里怎么做?
+把 a、b 放进 RAX、RBX,完成交换。
+"""
+
+[[steps]]
+kind = "run"
+title = "运行三步交换"
+content = """
+打开实验,单步走完 5 条指令。观察:RCX 暂存了 RAX 的旧值,然后 RAX、RBX 依次被覆盖。
+这就是 `tmp = a; a = b; b = tmp;`。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "子寄存器写语义(重要!)"
+content = """
+注意 `mov eax, 0x11` 这一步——解释卡会显示 RAX 的完整值是 **0x0000000000000011**:
+写 EAX(32 位)会**把高 32 位清零**。这是 x86-64 的规则:
+
+- 写 32 位寄存器 → 高 32 位清零(zero-extend)
+- 写 8/16 位寄存器 → 高位保持不变
+
+切换到寄存器面板,展开 RAX 的子寄存器视图对照理解。
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "XOR 交换与它的陷阱"
+content = """
+传说中"不用临时变量"的交换:
+
+```
+xor eax, ebx
+xor ebx, eax
+xor eax, ebx
+```
+
+数学上正确(三次异或),但在现代 CPU 上**并不更快**——还依赖了"两变量不同地址"的前提。
+如果对同一个地址 xor 三次,结果是 0!现代编译器从不生成它。亲手试试对同一寄存器 xor
+会发生什么。
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:把交换写进内存"
+content = """
+修改源码:把 b 存进内存(`mov [bvar], rbx`),交换寄存器后再写回。单步观察内存视图的变化。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "本课配套预测题与补全题各一道,见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- MOV 在寄存器/内存/立即数之间复制数据,不影响标志位。
+- 写 32 位子寄存器清零高位;x86-64 最重要的写语义。
+- "聪明"的技巧(XOR 交换)未必更快——以测量为准。
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["mov", "subregisters", "zero-extend", "xor"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段二第 2 课:算术指令与标志位——CPU 怎么知道溢出了?"

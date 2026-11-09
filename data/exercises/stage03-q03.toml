@@ -1,0 +1,36 @@
+# 习题:端序观察(阶段三)
+
+[exercise]
+id = "stage03-q03-predict-endian"
+type = "predict"
+title = "预测:0x11223344 的第一个字节是谁?"
+stage = 3
+lesson = "stage03-lesson04"
+knowledge = ["endianness", "little-endian"]
+difficulty = 2
+related_experiment = "stage03-lesson04"
+
+hints.level1 = "x86-64 是小端:最低有效字节放在最低地址。"
+hints.level2 = "[val] 处是 0x44,[val+1] 处是 0x33 —— movzx 把字节零扩展进 eax。"
+
+[predict]
+exec = "step:3"
+asm = '''
+[bits 64]
+org 0x400000
+mov dword [val], 0x11223344
+movzx eax, byte [val]
+movzx ecx, byte [val+1]
+align 512
+val: dd 0
+'''
+
+[[predict.questions]]
+key = "RAX"
+prompt = "第 2 条 movzx(读 [val])执行完,RAX = ?(提示:movzx 零扩展)"
+expect_kind = "reg:RAX"
+
+[[predict.questions]]
+key = "RCX"
+prompt = "第 3 条 movzx(读 [val+1])执行完,RCX = ?"
+expect_kind = "reg:RCX"

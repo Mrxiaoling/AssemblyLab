@@ -1,0 +1,193 @@
+# L7.2 — 阶段七:co_await 的展开(C++20 协程 ②)
+
+[lesson]
+id = "stage07-lesson02"
+title = "co_await:await_ready / await_suspend / await_resume"
+stage = 7
+requires = ["stage07-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "co_await 这一个关键字,编译器展开成了哪几步机器动作?"
+outcomes = ["读懂 awaiter 三部曲的调用顺序", "在反汇编中辨认挂起点的存档动作", "理解 suspend_always/suspend_never 的差别只是 await_ready 返回值"]
+
+[lesson.experiment]
+mode = "debug"
+compiler = "clang++"
+isa = "x86-64"
+source = '''#include <coroutine>
+#include <cstdio>
+#include <exception>
+
+struct Task {
+    struct promise_type {
+        Task get_return_object() {
+            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+    std::coroutine_handle<> h;
+    void resume() { h.resume(); }
+};
+
+// 自定义 awaiter:把三部曲打印出来
+struct StepAwaiter {
+    bool await_ready() noexcept {
+        std::printf("  [1] await_ready\\n");
+        return false;              // false = 需要挂起
+    }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+        std::printf("  [2] await_suspend (handle=%p)\\n", (void*)&h);
+    }
+    void await_resume() noexcept {
+        std::printf("  [3] await_resume\\n");
+    }
+};
+
+Task foo() {
+    std::printf("body-1\\n");
+    co_await StepAwaiter{};
+    std::printf("body-2\\n");
+    co_await StepAwaiter{};
+    std::printf("body-3\\n");
+}
+
+int main() {
+    Task t = foo();
+    std::printf("-- resume #1\\n"); t.resume();
+    std::printf("-- resume #2\\n"); t.resume();
+    std::printf("-- end\\n");
+    return 0;
+}
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+`co_await expr` 是协程最核心的一句话。标准规定它等价于一个**固定流程**:
+
+1. 得到 awaiter(来自 expr 的 operator co_await 或自身)
+2. `await_ready()` —— "已经就绪,不用挂起?" true 则跳过挂起
+3. `await_suspend(handle)` —— 真正挂起前最后一步;可注册恢复逻辑
+4. 挂起:保存状态,控制权返回 resume() 的调用方
+5. 恢复后:`await_resume()` —— 结果作为 co_await 表达式的值
+
+本实验用打印版 awaiter 亲眼验证顺序。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:跑一遍 + 时间线"
+content = """
+点「打开本课实验」(clang++ 真机调试)→ 直接「▶ 继续」跑完,看输出顺序:
+
+```
+body-1
+  [1] await_ready
+  [2] await_suspend
+-- resume #1        ← 挂起后控制权在 main
+  [3] await_resume
+body-2
+  [1] await_ready
+  [2] await_suspend
+-- resume #2
+  [3] await_resume
+body-3
+```
+
+再看「协程」页签的时间线:两次挂起站 + 每站的帧。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "反汇编里认挂起点"
+content = """
+反汇编面板找 `co_await` 对应的机器码,辨认三个特征:
+
+1. **存档**:把下一个状态编号写进帧(`mov byte [rbx+__coro_index偏移], 1`)
+2. **调用 await_suspend**(`call StepAwaiter::await_suspend`)
+3. **返回**:挂起 = 从 foo "return"——但不是 ret 到调用者那么简单,
+   而是**函数结尾统一出口**:恢复调用方栈,`ret`
+
+恢复时 `__resume_fn` 入口按 index 跳过已完成部分,直接到
+`await_resume` 调用 → 继续函数体。
+"""
+
+[[steps]]
+kind = "state"
+title = "suspend_always vs suspend_never"
+content = """
+把 `StepAwaiter::await_ready` 的返回值改成 `true` 再跑:
+[2] await_suspend 不再打印、不挂起、时间线少一站。
+
+`suspend_always` = await_ready 恒 false(总挂起);
+`suspend_never` = await_ready 恒 true(总不挂)。
+它们的全部差别就是这一个返回值——机器层面没有魔法。
+"""
+
+[[steps]]
+kind = "theory"
+title = "标准 vs 实现(本课的双栏结论)"
+content = """
+**标准要求**:三部曲的调用顺序、await_ready 为 true 时不挂起、
+await_suspend 返回 void/handle/bool 的三种语义。
+**实现选择(clang 14)**:状态编号怎么编、帧字段怎么排、
+挂起是"从函数尾部统一 ret"、HALO 是否把帧放上栈。
+页面上你看到的字节码全部属于右列——标准没有规定任何一条指令。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `co_yield v` ≡ `co_await promise.yield_value(v)`——同一套三部曲
+- await_suspend 里可把 handle 存进定时器/IO 队列:这就是异步框架的全部机制
+- await_suspend 返回 handle 可实现"协程接力"(挂起后立即恢复另一个协程)
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "await_suspend 会阻塞" —— 它是挂起**前**的钩子,必须快速返回
+- ❌ "co_await 只能配协程类型" —— 任何实现三部曲的类型都是合法 awaiter
+- ❌ "挂起后函数栈还在" —— 挂起即栈展开,一切需保留的状态都在帧里
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:三次 resume 的协程"
+content = """
+给 foo 再加一个 `co_await StepAwaiter{}`,main 里补第三次 resume。
+录制时间线:挂起站从 2 变 3,状态编号递增。
+**每个新挂起点 = 帧多一个状态 + awaiter 槽位**(帧大小在 DWARF 里可见)。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:await_ready 改 true 后,时间线站点数与输出顺序。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- co_await = await_ready → (挂起: await_suspend + 存状态 + 返回) → 恢复后 await_resume
+- suspend_always/never 差别只在 await_ready 返回值
+- 挂起点的机器三特征:存 index、调 await_suspend、统一出口 ret
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["awaiter", "await-ready", "await-suspend", "await-resume", "co-yield"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "挂起与恢复的全景:局部变量生命周期与协程端到端时间线。"

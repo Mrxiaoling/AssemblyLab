@@ -1,0 +1,137 @@
+# L5.1 — 阶段五:优化级别 -O0 到 -O3(编译器与汇编 ①)
+
+[lesson]
+id = "stage05-lesson01"
+title = "-O0 到 -O3:编译器的四副面孔"
+stage = 5
+requires = ["stage04-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "同一份 C++,O0 和 O2 的汇编能差多少?编译器到底替你做了什么?"
+outcomes = ["会用优化对比工作台并排阅读四个级别", "识别内联/常量折叠/死代码消除", "建立'看汇编验证直觉'的调试习惯"]
+
+[lesson.experiment]
+mode = "compare"
+isa = "x86-64"
+source = '''// 同一份代码,四个优化级别能差多少?
+// 1) 点「编译对比」 2) 把 n 改成 100 再对比 3) 找找 -O2 里循环去哪了
+int sum_to(int n) {
+    int s = 0;
+    for (int i = 1; i <= n; i++) {
+        s += i;
+    }
+    return s;
+}
+
+int main() {
+    int r = sum_to(10);
+    return r;
+}
+'''
+watch = []
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+调试 C++ 时你可能见过这种怪事:
+**-O2 下变量"看不见了"、断点跳来跳去、printf 被删了**。
+一切怪事的根源都在同一处:你以为的代码 ≠ 编译器生成的代码。
+
+本节用「优化对比」工作台,把同一份代码的 O0..O3 汇编并排摆开,逐一认领编译器的每项"篡改"。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:并排对比"
+content = """
+点「打开本课实验」进入优化对比页(源码已预载),点「编译对比」。
+四列汇编并排。先做三件观察:
+1. 每列右上角**指令数**:O0 → O3 递减?
+2. 左侧过滤到 `sum_to(int)`,逐列看它变成什么
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "O0:忠实翻译"
+content = """
+O0 列的 sum_to:push rbp 建帧,每次循环 `mov [rbp-4],i` + `mov [rbp-8],s`
+——**每个变量都老老实实住栈里**,每次读写都访存。
+这就是调试器在 -O0 下"变量都看得见、单步跟源码走"的原因:它最像源码。
+"""
+
+[[steps]]
+kind = "state"
+title = "O1/O2:循环消失术"
+content = """
+O1 列:变量搬进寄存器,栈帧没了,循环还在但只剩几条。
+O2 列更狠:`sum_to` 可能只剩 **一条 `imul`+`ret` 或直接 `lea`**
+—— 高斯求和?不,是**循环不变量分析 + 归纳变量强度削减**,
+即便编译器不识公式,也会把"每次加一个递增 i"改写成等价的乘法/常数。
+
+若 O2 的 main 里连 `call sum_to` 都没了:那是**内联 + 常量折叠**
+——sum_to(10) 直接算成 55(0x37),函数整个蒸发。
+"""
+
+[[steps]]
+kind = "theory"
+title = "编译器凭什么敢这么改"
+content = """
+唯一许可证:**可观察行为不变**(as-if 规则)。
+变量搬进寄存器、死代码删除、循环变形——只要程序对外表现一致就合法。
+推论:**汇编级事实(变量地址、调用是否存在)在优化后不可靠**。
+调试优化代码要么重新用 -O0 编译,要么读汇编——没有第三条路。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+- `volatile`:告诉编译器"这个内存访问不可省"——嵌入式的呼吸管
+- `static` 内部函数更容易被内联/删除
+- 性能调优的正确顺序:先读 O2 汇编确认热点,再改源码,**不要**和编译器比拼手写技巧
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "-O3 一定比 -O2 快" —— 更激进 ≠ 更快,膨胀的代码可能更慢
+- ❌ "release 崩了 debug 不崩,是编译器 bug" —— 恰恰说明有 UB(未定义行为),被优化放大了
+- ❌ "for 循环写得越紧凑编译器优化越强" —— 结构清晰、无 UB 才是优化器最喜欢的输入
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:三个对照实验"
+content = """
+在优化对比页依次改源码重跑:
+1. `sum_to` 里 `s += i` 改 `s += i*2`:观察 O2 是否又化简
+2. 加 `volatile int v = n;`:看 volatile 挡住了哪些优化
+3. 把编译器切到 **Win64 (mingw)**:看 sum_to 参数从 RDI 变成 RCX
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "阶段五习题:预测函数在某优化级别下是否还存在。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- O0 忠实翻译(栈上变量,可调试);O1+ 寄存器化;O2 内联+循环变形+常量折叠;O3 更激进向量化
+- as-if 规则是全部优化的边界
+- 优化后以汇编为准,不以源码直觉为准
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["optimization-levels", "inlining", "constant-folding", "dce", "volatile"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段六:this、虚表与 lambda——C++ 对象模型的机器真相。"

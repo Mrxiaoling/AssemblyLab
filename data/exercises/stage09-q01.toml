@@ -1,0 +1,38 @@
+# 习题:CAS 失败路径(阶段九)
+
+[exercise]
+id = "stage09-q01-predict-cas-fail"
+type = "predict"
+title = "预测:lock cmpxchg 失败时的 RAX 与 ZF"
+stage = 9
+lesson = "stage09-lesson02"
+knowledge = ["cas", "lock-prefix", "cmpxchg"]
+difficulty = 3
+related_experiment = "stage09-lesson02"
+
+hints.level1 = "失败(cmpxchg):RAX 被填成内存当前值(这就是重试的数据来源);ZF=0。"
+hints.level2 = "内存=1(已锁)≠ eax=0 → 失败;RAX=1,ZF=0;内存不变仍是 1。"
+
+[predict]
+exec = "step:5"
+asm = """
+[bits 64]
+org 0x400000
+mov     eax, 0
+mov     edx, 2
+lock cmpxchg dword [lock_var], edx
+mov     ebx, eax
+mov     ecx, [lock_var]
+align 512
+lock_var: dd 1
+"""
+
+[[predict.questions]]
+key = "RBX"
+prompt = "第 3 条(lock cmpxchg)失败后,RBX = 失败时带回的内存值 = ?"
+expect_kind = "reg:RBX"
+
+[[predict.questions]]
+key = "RCX"
+prompt = "第 4 条(mov ecx,[lock_var])读回的内存 = ?(失败时内存不变)"
+expect_kind = "reg:RCX"

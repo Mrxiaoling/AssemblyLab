@@ -1,0 +1,163 @@
+# L9.3 — 阶段九:独占访问与内存屏障(并发与数据并行 ③,ARM64)
+
+[lesson]
+id = "stage09-lesson03"
+title = "ldaxr/stlxr 与 dmb:弱内存模型世界的一次性车票"
+stage = 9
+requires = ["stage09-lesson02", "stage10-lesson01"]
+estimated_minutes = 45
+
+[lesson.goal]
+problem = "ARM64 没有 lock 前缀,它的原子操作怎么做?内存屏障为什么必不可少?"
+outcomes = ["掌握 LL/SC(ldaxr/stlxr)配对", "手写 ARM64 自旋锁", "对比 x86 强模型与 ARM64 弱模型"]
+
+[lesson.experiment]
+mode = "asm"
+isa = "arm64"
+source = '''// ARM64 自旋锁:ldaxr/stlxr(LL/SC)一次成功 + dmb
+.global _start
+_start:
+    adr     x2, lock_var            // 取地址(PC 相对,±1MB)
+    mov     x4, #1                  // "已锁"
+acquire:
+    ldaxr   w0, [x2]                // 独占读(获取语义):锁值进 w0
+    cbnz    w0, acquire             // 非 0 = 别人锁着 → 自旋
+    stlxr   w3, x4, [x2]            // 独占写 1(释放语义);w3=0 成功
+    cbnz    w3, acquire             // 独占失败 → 重试(真实多核可能失败)
+    dmb     ish                     // 数据内存屏障(临界区数据对其他核可见)
+    add     w5, w5, #1              // ===== 临界区 =====
+    str     w5, [x2, #4]            // 写共享数据(lock_var+4)
+    mov     x8, #93                 // exit(0)
+    mov     x0, #0
+    svc     #0
+
+.balign 512
+lock_var:   .word 0                 // 锁
+shared:     .word 0                 // 临界区数据(lock_var+4)
+'''
+watch = ["X0", "X2", "W3"]
+
+[[steps]]
+kind = "problem"
+title = "本节要解决的问题"
+content = """
+上一课 x86 的 CAS 是"一条指令原子"。ARM64 没有这种复杂指令——
+它用 **LL/SC(Load-Linked/Store-Conditional)**:
+独占读(ldaxr)领一张"一次性车票",独占写(stlxr)检票——
+中间若有任何风吹草动(别的核写了那块内存),检票失败(w≠0),重来。
+外加:**弱内存模型**让 dmb 屏障成为必需品。
+"""
+
+[[steps]]
+kind = "run"
+title = "实验:一次成功的 LL/SC"
+content = """
+点「打开本课实验」(ARM64 工作台)→ 单步:
+`ldaxr w0,[x2]` 读到 0(未锁)→ `stlxr w3, x4, [x2]` 写 1 → **w3=0(独占成功)**
+→ dmb → 临界区 shared=1 → svc 退出。
+内存面板 0x400200(lock_var):01 00 00 00 | 01 00 00 00——锁与数据都生效。
+"""
+
+[[steps]]
+kind = "walkthrough"
+title = "LL/SC 的两个语义标签"
+content = """
+- **ldaxr**(Load-Acquire eXclusive):读 + 独占监视器 + 获取语义
+  (此读之后的所有访问不会被重排到它前面)
+- **stlxr**(Store-Release eXclusive):写 + 释放语义 + 检票
+  (之前所有访问先全局可见,再让这次写可见);w3=0 才算成功
+
+配对纪律:**ldaxr/stlxr 之间指令越少越好**——间隔太远或中间发生别的写,
+监视器可能被清,检票失败重试。自旋锁就是 `ldaxr…stlxr/失败重试` 的循环。
+"""
+
+[[steps]]
+kind = "state"
+title = "dmb:为什么 x86 不需要它"
+content = """
+x86 是**强内存模型**(TSO):store 基本按序全局可见,StoreLoad 之外不需要显式屏障。
+ARM64 是**弱内存模型**:普通 st/ldr 可以乱序到达其他核——
+
+```
+数据写 str w5, [shared]  →  锁释放 stlxr 0  ← 若不屏障,别的核可能"先看到解锁,后看到数据"!
+```
+
+`dmb ish`(内部共享域数据内存屏障)强制:**屏障前的访问先于屏障后的全局可见**。
+这就是 x86 `mfence`(几乎不用)与 ARM64 `dmb`(处处要)的反差根源——
+**C++ memory_order_seq_cst 在两边的代价完全不同**。
+"""
+
+[[steps]]
+kind = "theory"
+title = "x86 vs ARM64 原子机制对照"
+content = """
+| 事项 | x86-64 | ARM64 |
+|---|---|---|
+| 原子交换/比较 | `lock cmpxchg`(单指令) | ldaxr/stlxr 循环(LL/SC) |
+| fetch_add | `lock xadd` | ldaddal(LSE 扩展)或 LL/SC 循环 |
+| 获取/释放语义 | 隐含(强模型) | 必须用 a/r 变体或 dmb |
+| 全屏障 | mfence(罕见) | dmb ish(常用) |
+| 自旋提示 | pause | yield |
+| 失败语义 | CAS 的 ZF | stlxr 状态寄存器 ≠0 |
+
+同一份 `std::atomic` C++ 在两边的汇编完全不同——优化对比页 aarch64 编译器现成可看。
+"""
+
+[[steps]]
+kind = "cpp-link"
+title = "与 C++ 的联系"
+content = """
+```cpp
+std::atomic<int> lk{0};
+int expected = 0;
+lk.compare_exchange_strong(expected, 1, std::memory_order_acquire);
+```
+- acquire/release 在 ARM64 = ldaxr/stlxr 的 a/r 后缀;在 x86 = 免费(强模型)
+- `std::memory_order_relaxed` 在 ARM64 省掉屏障是真的快;在 x86 没差
+- 这就是"内存序跨架构不可移植调优"的根源:以目标架构汇编为准
+"""
+
+[[steps]]
+kind = "pitfalls"
+title = "常见误区"
+content = """
+- ❌ "ARM64 没有原子指令" —— 有 LL/SC + LSE 扩展;只是形态不同
+- ❌ "dmb 是可选优化" —— 弱模型下漏 dmb = 竞态;不是性能问题是正确性问题
+- ❌ "ldaxr/stlxr 之间可以随便插代码" —— 监视器随时可能被清,检票失败是常态
+- ❌ "取地址用 ldr =label" —— 字面池条目是绝对地址,as 留重定位,objcopy 扁平二进制
+  不应用 → 运行时读到 0;**本沙箱一律用 adr**(±1MB 内)——本课源码注释即为此而写
+"""
+
+[[steps]]
+kind = "hands-on"
+title = "动手:模拟检票失败"
+content = """
+把 `stlxr w3, x4, [x2]` 后的 `cbnz w3, acquire` 保留,但把 x4 改从内存读
+(`ldr x4, [x2, #8]`):单步观察 w3=0 依旧成功(单核模拟器监视器稳定)。
+真正的失败只在多核发生——在注释里写下"监视器何时被清":其他核的写、异常、Cache 逐出。
+这决定了重试循环为什么必须存在。
+"""
+
+[[steps]]
+kind = "exercise"
+title = "课后习题"
+content = "预测:LL/SC 序列后的 lock_var/shared 内存值与 w3。见习题中心。"
+
+[[steps]]
+kind = "summary"
+title = "本节总结"
+content = """
+- LL/SC = ldaxr(领票)+ stlxr(检票,0=成功);自旋锁 = 失败重试循环
+- 弱内存模型:dmb 强制顺序;acquire/release 是 a/r 后缀
+- x86 强模型免费给顺序,ARM64 显式付费——同一 C++ 两种代价
+"""
+
+[[steps]]
+kind = "links"
+title = "关联知识"
+nodes = ["ll-sc", "memory-model", "dmb", "acquire-release", "lse-atomics"]
+
+[[steps]]
+kind = "next"
+title = "下一步"
+content = "阶段十收官方向 / 综合项目:读真实项目的关键函数(Phase 7)。"
