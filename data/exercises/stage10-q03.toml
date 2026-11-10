@@ -13,6 +13,13 @@ related_experiment = "stage09-lesson03"
 
 hints.level1 = "stlxr 的状态寄存器(第一个操作数)0=独占成功;成功后内存=新值。"
 hints.level2 = "初始 0 → ldaxr w0 读 0 → stlxr 写 1 成功(w3=0)→ 内存=1。"
+answer_md = """
+`ldaxr w0, [x?]` 以**获取语义**读锁内存(初值 0)并登记独占监视;`stlxr w3, w1, [x?]`
+以**释放语义**尝试写入新值 1。独占标记仍有效 → 存储成功,状态寄存器 W3=0,
+写 32 位寄存器会把 X3 高 32 位清零,所以 **X3=0**。
+随后 `ldr x9` 读回内存 → **X9=1**。若期间有其它核写过该地址,STXR 会失败并返回 W3=1,
+内存保持旧值——这就是 LL/SC 与 x86 `lock cmpxchg` 在实现原子性上的根本差异。
+"""
 
 [predict]
 exec = "step:5"

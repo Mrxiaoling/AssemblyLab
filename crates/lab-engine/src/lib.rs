@@ -318,9 +318,6 @@ impl Session {
         self.machine.lock().unwrap().clear_stop();
         let bps = self.breakpoints.lock().unwrap().clone();
         let outcome: RunOutcome = self.machine.lock().unwrap().run(&bps, self.limits)?;
-        if let StopReason::Fault { .. } = &outcome.stop {
-            // Fault 是终态
-        }
         *self.last_stop.lock().unwrap() = Some(outcome.stop.clone());
         let summary = RunSummary {
             executed: outcome.executed,
@@ -643,6 +640,3 @@ pub fn disassemble_image(isa_id: &str, image: &ProgramImage) -> Result<Vec<lab_a
     lab_adapters::disasm_for(isa_id, &image.bytes, image.base)
 }
 
-/// 初始化空汇编镜像注释(避免 unused 警告的占位使用)
-#[allow(dead_code)]
-fn _unused(_x: &HashMap<String, u64>) {}

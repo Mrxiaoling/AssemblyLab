@@ -11,6 +11,16 @@ fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data")
 }
 
+/// WSL 可用性探测:ARM64 汇编(aarch64-linux-gnu-as)与模式 B 依赖 WSL2。
+/// 沙箱/CI 中 wsl.exe 可能被策略拦截,此时跳过 ARM64 用例而不是把整轮测试判失败。
+fn wsl_available() -> bool {
+    std::process::Command::new("wsl.exe")
+        .args(["-d", "Ubuntu-22.04", "-e", "true"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn all_course_files() -> Vec<PathBuf> {
     let dir = data_dir().join("courses");
     let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -52,6 +62,8 @@ fn courses_parse_and_schema_ok() {
 
 #[test]
 fn mode_a_experiments_actually_run() {
+    let wsl = wsl_available();
+    let mut skipped = 0usize;
     for f in all_course_files() {
         let text = std::fs::read_to_string(&f).unwrap();
         let v: toml::Value = toml::from_str(&text).unwrap();
@@ -70,6 +82,10 @@ fn mode_a_experiments_actually_run() {
             .and_then(|x| x.as_str())
             .unwrap_or("x86-64")
             .to_string();
+        if isa_id != "x86-64" && !wsl {
+            skipped += 1;
+            continue; // ARM64 实验需 WSL GNU as
+        }
         let isa = IsaDefinition::load_from_dir(&data_dir(), &isa_id)
             .unwrap_or_else(|e| panic!("{id}: ISA {isa_id} 加载失败: {e}"));
         let abi = isa.abis.first().map(|a| a.id.clone()).unwrap_or_default();
@@ -98,6 +114,9 @@ fn mode_a_experiments_actually_run() {
             );
         }
     }
+    if skipped > 0 {
+        eprintln!("skip: WSL 不可用,跳过 {skipped} 门 ARM64 课程的真实执行校验");
+    }
 }
 
 #[test]
@@ -106,6 +125,11 @@ fn exercises_parse_and_have_structure() {
     assert!(list.len() >= 19, "应至少有 19 道习题,实际 {}", list.len());
     for ex in &list {
         assert!(!ex.exercise.hints.level1.is_empty(), "{}: 缺 level1 提示", ex.exercise.id);
+        assert!(
+            !ex.exercise.answer_md.trim().is_empty(),
+            "{}: 缺 answer_md 参考解析(用户主动查看解析时会是空内容)",
+            ex.exercise.id
+        );
         assert!(
             ex.predict.is_some() || ex.fill_blank.is_some() || ex.quiz.is_some() || ex.self_check.is_some(),
             "{}: predict/fill_blank/quiz/self_check 至少其一",
@@ -129,6 +153,69 @@ fn exercises_parse_and_have_structure() {
             assert!(!f.testcases.is_empty(), "{}: 无判题用例", ex.exercise.id);
         }
     }
+}
+
+/// 课程正文数值 golden:用真实模拟引擎逐步执行,核对第 N 步寄存器快照。
+/// 课程可用 `[[lesson.experiment.golden]] step/reg/value` 声明正文里引用的数值;
+/// 改动实验源码却忘记改正文时,这里会失败(TEST_PLAN §5 的最小可运行实现)。
+#[test]
+fn course_golden_values_match_real_execution() {
+    let parse_hex = |s: &str| -> u64 {
+        u64::from_str_radix(s.trim().trim_start_matches("0x"), 16)
+            .unwrap_or_else(|e| panic!("非法十六进制值 {s}: {e}"))
+    };
+    let mut checked = 0usize;
+    for f in all_course_files() {
+        let text = std::fs::read_to_string(&f).unwrap();
+        let v: toml::Value = toml::from_str(&text).unwrap();
+        let exp = match v.get("lesson").and_then(|l| l.get("experiment")) {
+            Some(e) => e,
+            None => continue,
+        };
+        let goldens = match exp.get("golden").and_then(|g| g.as_array()) {
+            Some(g) if !g.is_empty() => g,
+            _ => continue,
+        };
+        let id = v["lesson"]["id"].as_str().unwrap_or("?").to_string();
+        let src = exp.get("source").and_then(|x| x.as_str()).unwrap_or("");
+        let isa_id = exp.get("isa").and_then(|x| x.as_str()).unwrap_or("x86-64");
+        let isa = IsaDefinition::load_from_dir(&data_dir(), isa_id)
+            .unwrap_or_else(|e| panic!("{id}: ISA {isa_id} 加载失败: {e}"));
+        let abi = isa.abis.first().map(|a| a.id.clone()).unwrap_or_default();
+        let mut session = lab_engine::Session::create(9998, isa, abi, src)
+            .unwrap_or_else(|e| panic!("{id}: 实验装载失败: {e}"));
+        let mut snapshots: Vec<Vec<(String, String)>> = Vec::new();
+        for _ in 0..20_000 {
+            let reports = session.step(1).expect("步进失败");
+            if reports.is_empty() {
+                break;
+            }
+            snapshots.push(reports.last().unwrap().after.clone());
+            if session.state().terminal {
+                break;
+            }
+        }
+        for g in goldens {
+            let step = g.get("step").and_then(|x| x.as_integer()).unwrap_or(0) as usize;
+            let reg = g.get("reg").and_then(|x| x.as_str()).unwrap_or("");
+            let want = g.get("value").and_then(|x| x.as_str()).unwrap_or("");
+            let snap = snapshots
+                .get(step.saturating_sub(1))
+                .unwrap_or_else(|| panic!("{id}: 实验未执行到第 {step} 步"));
+            let got = snap
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(reg))
+                .map(|(_, v)| v.as_str())
+                .unwrap_or_else(|| panic!("{id}: 第 {step} 步快照无寄存器 {reg}"));
+            assert_eq!(
+                parse_hex(got),
+                parse_hex(want),
+                "{id}: 第 {step} 步 {reg} 真实值 {got} 与正文 golden {want} 不符"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 3, "golden 校验条目过少({checked}),机制形同虚设");
 }
 
 /// 判题链路自检:用参考答案作答,应全部通过(新 P3 习题覆盖)
@@ -169,6 +256,10 @@ fn p3_exercises_judge_self_check() {
 /// ARM64 习题判题自检(按 exercise.isa 装载)
 #[test]
 fn p5_arm64_exercises_judge_self_check() {
+    if !wsl_available() {
+        eprintln!("skip: WSL 不可用(沙箱/CI)——ARM64 习题判题自检跳过");
+        return;
+    }
     let cases: Vec<(&str, Vec<(&str, &str)>)> = vec![
         // 21 + (2<<1) + 100 = 125 = 0x7D;NZCV 全 0
         ("stage10-q01-predict-adds", vec![("X2", "0x7d"), ("NZCV", "0")]),
@@ -254,12 +345,17 @@ fn p6_exercises_judge_self_check() {
         // ARM64 LL/SC:内存=1;stlxr 状态 0
         ("stage10-q03-predict-llsc", vec![("X9", "0x1"), ("X3", "0x0")]),
     ];
+    let wsl = wsl_available();
     for (id, answers) in cases {
         let ex = load_exercises(&data_dir())
             .into_iter()
             .find(|e| e.exercise.id == id)
             .unwrap_or_else(|| panic!("{id}: 习题未加载"));
         let isa_id = if ex.exercise.isa.is_empty() { "x86-64" } else { &ex.exercise.isa };
+        if isa_id != "x86-64" && !wsl {
+            eprintln!("skip: WSL 不可用,跳过 ARM64 用例 {id}");
+            continue;
+        }
         let isa = IsaDefinition::load_from_dir(&data_dir(), isa_id).expect("ISA 加载");
         let judge = Judge::new(isa);
         let map: std::collections::HashMap<String, String> = answers

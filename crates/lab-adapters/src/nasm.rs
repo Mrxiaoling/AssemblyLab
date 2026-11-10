@@ -2,11 +2,11 @@
 //! 安全:源码经临时文件传入,绝不拼接命令行(SECURITY_DESIGN §4)。
 //! 超时/输出截断统一处理;错误行号映射回用户源码。
 
+use crate::process;
 use lab_core::{LabError, LineMapping, ProgramImage};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 /// NASM 可执行文件查找顺序:环境变量 ASSEMBLYLAB_NASM → 仓库 tools/nasm/nasm.exe → PATH。
 pub fn find_nasm() -> Option<std::path::PathBuf> {
@@ -96,28 +96,27 @@ pub fn assemble(source: &str, default_base: u64) -> Result<ProgramImage, LabErro
     let lst_path = dir.join("prog.lst");
     std::fs::write(&src_path, &full_source).map_err(|e| LabError::Io(e.to_string()))?;
 
-    let output = Command::new(&nasm)
-        .args([
-            "-f",
-            "bin",
-            "-l",
-            lst_path.to_str().unwrap(),
-            "-o",
-            bin_path.to_str().unwrap(),
-            src_path.to_str().unwrap(),
-        ])
-        .output();
-
-    let result = match output {
+    let mut cmd = Command::new(&nasm);
+    cmd.args([
+        "-f",
+        "bin",
+        "-l",
+        lst_path.to_str().unwrap(),
+        "-o",
+        bin_path.to_str().unwrap(),
+        src_path.to_str().unwrap(),
+    ]);
+    let result = match process::run_with_timeout(&mut cmd, process::DEFAULT_TIMEOUT) {
         Ok(o) => o,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(LabError::ToolUnavailable(format!("无法启动 nasm: {e}")));
+            tracing::warn!("nasm 调用失败: {e}");
+            return Err(LabError::ToolUnavailable("nasm 调用失败或超时".into()));
         }
     };
 
     if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
+        let stderr = process::stderr_text(&result);
         let err = parse_nasm_error(&stderr, line_offset).unwrap_or_else(|| LabError::Assemble {
             line: 0,
             message: stderr.lines().next().unwrap_or("汇编失败").to_string(),
@@ -276,12 +275,11 @@ fn is_label_name(s: &str) -> bool {
 /// 工具健康检查(供 /api/health)。
 pub fn nasm_version() -> Result<String, LabError> {
     let nasm = find_nasm().ok_or_else(|| LabError::ToolUnavailable("nasm 未找到".into()))?;
-    let out = Command::new(&nasm)
-        .arg("-v")
-        .output()
-        .map_err(|e| LabError::ToolUnavailable(format!("nasm 启动失败: {e}")))?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(s)
+    let mut cmd = Command::new(&nasm);
+    cmd.arg("-v");
+    let out = process::run_with_timeout(&mut cmd, process::DEFAULT_TIMEOUT)
+        .map_err(|e| LabError::ToolUnavailable(format!("nasm 启动失败或超时: {e}")))?;
+    Ok(process::stdout_text(&out).trim().to_string())
 }
 
 /// 供测试使用:临时目录清理辅助
@@ -289,5 +287,3 @@ pub fn cleanup_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-#[allow(dead_code)]
-fn _assert_timeout_type(_: Duration) {}

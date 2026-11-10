@@ -5,15 +5,25 @@
 //! 隔离等级如实标注:进程级限制(WSL timeout/ulimit 编译侧),非强沙箱。
 
 use std::collections::HashMap;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use lab_adapters::compiler::{self, CompileOutput};
 use lab_adapters::gdb::GdbSession;
-use lab_core::{IsaDefinition, LabError};
+use lab_adapters::process;
+use lab_core::IsaDefinition;
 use serde::Serialize;
 
 use crate::{hx, Explanation, FlagDiffItem, MemChangeItem, PcJump, RegDiffItem, StepReport};
+
+/// 一条 ARM64 远程会话独占的远端资源,会话结束(Drop)时逐一回收。
+struct RemoteHandle {
+    tunnel: Child,
+    user_host: String,
+    remote_dir: String,
+}
 
 pub struct DebugSession {
     pub id: u64,
@@ -22,6 +32,8 @@ pub struct DebugSession {
     pub arch: String,
     /// ARM64 远程:user@host(Drop 时清理远端 gdbserver)
     pub remote_host: Option<String>,
+    /// ARM64 远程会话资源句柄(ssh 隧道 + 远端目录)
+    remote: Mutex<Option<RemoteHandle>>,
     pub source: Mutex<String>,
     pub compile: CompileOutput,
     gdb: Mutex<GdbSession>,
@@ -33,12 +45,88 @@ pub struct DebugSession {
     last_stop: Mutex<Option<String>>, // reason 文本
     /// 程序是否已运行过(区分 run 与 continue)
     started: std::sync::atomic::AtomicBool,
-    /// 最近一次停止时的 RIP(供 before/after diff)
-    last_rip: Mutex<Option<u64>>,
 }
 
 const SOURCE_FILE: &str = "main.cpp";
 const MAX_STEP_PER_REQUEST: u32 = 500;
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// ssh 命令全部走 BatchMode(依赖外部免密配置),不使用任何口令参数。
+fn ssh_cmd(user_host: &str, remote_cmd: &str) -> Command {
+    let mut c = Command::new("ssh");
+    c.args([
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", user_host, remote_cmd,
+    ]);
+    c
+}
+
+fn run_ok(mut cmd: Command, secs: u64, label: &str) -> Result<(), String> {
+    let out = process::run_with_timeout(&mut cmd, Duration::from_secs(secs))
+        .map_err(|e| format!("{label} 失败: {e}"))?;
+    if !out.status.success() {
+        // 远端 stderr 可能含主机名/路径,只写服务端日志,不回显客户端
+        tracing::warn!("{label} stderr: {}", process::stderr_text(&out));
+        return Err(format!("{label} 失败(详情见服务端日志)"));
+    }
+    Ok(())
+}
+
+fn wait_port(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 精确清理本会话的远端 gdbserver(pid 文件)与目录,不再 `pkill -f gdbserver` 全局杀伤。
+fn cleanup_remote(user_host: &str, remote_dir: &str) {
+    let cmd = format!(
+        "if [ -f {remote_dir}/gdbserver.pid ]; then kill \"$(cat {remote_dir}/gdbserver.pid)\" 2>/dev/null; fi; rm -rf {remote_dir}"
+    );
+    let mut c = ssh_cmd(user_host, &cmd);
+    let _ = process::run_with_timeout(&mut c, Duration::from_secs(10));
+}
+
+fn abort_remote(
+    tunnel: &mut Option<Child>,
+    user_host: &str,
+    remote_dir: &str,
+    work_dir: &std::path::Path,
+    e: String,
+) -> String {
+    if let Some(mut t) = tunnel.take() {
+        let _ = t.kill();
+        let _ = t.wait();
+    }
+    cleanup_remote(user_host, remote_dir);
+    let _ = std::fs::remove_dir_all(work_dir);
+    e
+}
+
+impl Drop for DebugSession {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.remote.lock() {
+            if let Some(h) = g.take() {
+                let mut child = h.tunnel;
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup_remote(&h.user_host, &h.remote_dir);
+            }
+        }
+        // 本地临时编译目录(含用户源码与可执行产物)随会话一起删除
+        let _ = std::fs::remove_dir_all(&self.compile.work_dir);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CoroTimelineStop {
@@ -85,6 +173,7 @@ impl DebugSession {
             arch: isa.id.clone(),
             isa,
             remote_host: None,
+            remote: Mutex::new(None),
             source: Mutex::new(source.to_string()),
             compile: out,
             gdb: Mutex::new(gdb),
@@ -93,7 +182,6 @@ impl DebugSession {
             step_counter: AtomicU64::new(0),
             last_stop: Mutex::new(None),
             started: std::sync::atomic::AtomicBool::new(false),
-            last_rip: Mutex::new(None),
         })
     }
 
@@ -110,76 +198,94 @@ impl DebugSession {
         g.snapshot().unwrap_or_default()
     }
 
-    /// ARM64 远程真机调试(P8):交叉编译 → scp → 远端 gdbserver → gdb-multiarch 连接。
-    /// 主机/用户经环境变量 ASSEMBLYLAB_ARM64_HOST / ASSEMBLYLAB_ARM64_USER 配置。
-    fn create_arm64_remote(id: u64, isa: IsaDefinition, source: &str, opt: &str, compiler: &str) -> Result<Self, String> {
-        use std::process::Command;
-        let host = std::env::var("ASSEMBLYLAB_ARM64_HOST").unwrap_or_else(|_| "10.20.15.47".into());
-        let user = std::env::var("ASSEMBLYLAB_ARM64_USER").unwrap_or_else(|_| "firefly".into());
+    /// ARM64 远程真机调试(P8):交叉编译 → scp → 远端回环 gdbserver → ssh 隧道 → gdb-multiarch。
+    ///
+    /// 三层默认保护:独立开关 `ASSEMBLYLAB_ENABLE_ARM64_REMOTE=1`;主机/用户必须显式配置
+    /// (代码中不内置任何内网地址);gdbserver 只绑远端 127.0.0.1,经 ssh -L 转发,不暴露到网络。
+    /// ssh 全程 `-o BatchMode=yes` 依赖外部免密配置,代码不持有任何口令。
+    fn create_arm64_remote(id: u64, isa: IsaDefinition, source: &str, opt: &str, _compiler: &str) -> Result<Self, String> {
+        if std::env::var("ASSEMBLYLAB_ENABLE_ARM64_REMOTE").ok().as_deref() != Some("1") {
+            return Err(
+                "ARM64 远程真机调试默认关闭:需显式设置 ASSEMBLYLAB_ENABLE_ARM64_REMOTE=1 并配置远程主机".into(),
+            );
+        }
+        let host = env_nonempty("ASSEMBLYLAB_ARM64_HOST")
+            .ok_or_else(|| "未配置 ASSEMBLYLAB_ARM64_HOST(不提供默认主机)".to_string())?;
+        let user = env_nonempty("ASSEMBLYLAB_ARM64_USER")
+            .ok_or_else(|| "未配置 ASSEMBLYLAB_ARM64_USER".to_string())?;
+        let valid = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        if !valid(&host) || !valid(&user) {
+            return Err("远程主机/用户名含非法字符".into());
+        }
+        let user_host = format!("{user}@{host}");
         let remote_dir = format!("/tmp/assemblylab-arm-{id}");
+        let remote_port: u16 = 2345 + (id % 1000) as u16;
+        let local_port: u16 = 30000 + (id % 1000) as u16;
+        let mut tunnel: Option<Child> = None;
 
+        // 强制交叉编译器:调用方默认传 g++,会产出 x86-64 ELF 推到 ARM 真机必然失败。
         let out = compiler::compile(&compiler::CompileRequest {
             source: source.to_string(),
             opt: opt.to_string(),
-            compiler: compiler.to_string(),
+            compiler: "aarch64-linux-gnu-g++".into(),
         })
         .map_err(|e| e.to_string())?;
-
-        // 二进制必须存在(compile 产物)
         let win_bin = out.work_dir.join("main");
         if !win_bin.exists() {
-            return Err("编译产物缺失(aarch64 ELF)".into());
+            let _ = std::fs::remove_dir_all(&out.work_dir);
+            return Err("交叉编译产物缺失(aarch64 ELF)".into());
         }
+        // 清理闭包拥有自己的参数副本,避免捕获后与后续 move 冲突
+        let abort = {
+            let uh = user_host.clone();
+            let rd = remote_dir.clone();
+            let wd = out.work_dir.clone();
+            move |t: &mut Option<Child>, e: String| -> String { abort_remote(t, &uh, &rd, &wd, e) }
+        };
 
-        // scp:Windows 侧推送到远端(免密 ssh);路径用正斜杠(反斜杠会被 scp 转义)
-        // 先清理远端残留的 gdbserver(其二进制可能被占用 → ETXTBSY)
-        let _ = Command::new("ssh")
-            .args(["-o", "BatchMode=yes", &format!("{user}@{host}"), "pkill -f gdbserver"])
-            .output();
+        // 1. 远端目录 → 2. 推送二进制
+        run_ok(ssh_cmd(&user_host, &format!("mkdir -p {remote_dir}")), 15, "创建远端目录")
+            .map_err(|e| abort(&mut tunnel, e))?;
         let win_bin_fwd = win_bin.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
-        let scp = Command::new("scp")
-            .args(["-o", "BatchMode=yes"])
+        let mut scp_cmd = Command::new("scp");
+        scp_cmd
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
             .arg(&win_bin_fwd)
-            .arg(format!("{user}@{host}:{remote_dir}/main"))
-            .output()
-            .map_err(|e| format!("scp 失败: {e}"))?;
-        if !scp.status.success() {
-            // 远端目录可能不存在,先建目录重试
-            let _ = Command::new("ssh")
-                .args(["-o", "BatchMode=yes", &format!("{user}@{host}"), &format!("mkdir -p {remote_dir}")])
-                .status();
-            let retry = Command::new("scp")
-                .args(["-o", "BatchMode=yes"])
-                .arg(&win_bin_fwd)
-                .arg(format!("{user}@{host}:{remote_dir}/main"))
-                .output()
-                .map_err(|e| format!("scp 失败: {e}"))?;
-            if !retry.status.success() {
-                return Err(format!(
-                    "scp 推送失败: {}",
-                    String::from_utf8_lossy(&retry.stderr)
-                ));
-            }
+            .arg(format!("{user_host}:{remote_dir}/main"));
+        run_ok(scp_cmd, 60, "推送交叉编译产物").map_err(|e| abort(&mut tunnel, e))?;
+
+        // 3. 远端 gdbserver 只监听回环,并写入本会话 pid 文件供精确清理(不再全局 pkill)。
+        let start = format!(
+            "chmod +x {remote_dir}/main; nohup gdbserver 127.0.0.1:{remote_port} {remote_dir}/main >/dev/null 2>&1 & echo $! > {remote_dir}/gdbserver.pid; exit"
+        );
+        run_ok(ssh_cmd(&user_host, &start), 15, "启动远端 gdbserver")
+            .map_err(|e| abort(&mut tunnel, e))?;
+
+        // 4. Windows 侧 ssh -L 隧道;gdb(WSL 内)连本机转发端口,远端调试端口不出网。
+        let mut tunnel_cmd = Command::new("ssh");
+        tunnel_cmd
+            .args([
+                "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-N",
+                "-L", &format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+                &user_host,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        tunnel = Some(
+            tunnel_cmd
+                .spawn()
+                .map_err(|e| abort(&mut tunnel, format!("建立 ssh 隧道失败: {e}")))?,
+        );
+        if !wait_port(local_port, Duration::from_secs(8)) {
+            return Err(abort(&mut tunnel, "ssh 隧道未就绪(远端 gdbserver 或免密配置异常)".into()));
         }
 
-        // 远端启动 gdbserver(后台;gdbserver 进程随调试会话存活)
-        // 固定端口:scp 前的 pkill 已清掉残留 gdbserver;非常见端口可能被远端防火墙拦截
-        let gdbserver_port: u16 = 2345;
-        let remote_target = format!("{host}:{gdbserver_port}");
-        // ssh 命令末尾的 exit 确保会话立即关闭,后台 gdbserver 得以存活(nohup+& 不够)
-        let ssh_setup = Command::new("ssh")
-            .args(["-o", "BatchMode=yes", &format!("{user}@{host}"),
-                   &format!("chmod +x {remote_dir}/main; nohup gdbserver :{gdbserver_port} {remote_dir}/main >/dev/null 2>&1 & exit")])
-            .output()
-            .map_err(|e| format!("ssh 启动 gdbserver 失败: {e}"))?;
-        if !ssh_setup.status.success() {
-            return Err("远端 gdbserver 启动失败".into());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(800));
-
-        // gdb-multiarch 连接远端
-        let mut gdb = GdbSession::spawn_multiarch_remote(&out.wsl_dir, &remote_target).map_err(|e| e.to_string())?;
-
+        // 5. gdb-multiarch 经隧道连接
+        let remote_target = format!("127.0.0.1:{local_port}");
+        let mut gdb = match GdbSession::spawn_multiarch_remote(&out.wsl_dir, &remote_target) {
+            Ok(g) => g,
+            Err(e) => return Err(abort(&mut tunnel, format!("连接远程调试目标失败: {e}"))),
+        };
         let _ = gdb.insert_symbol_breakpoint("main");
 
         Ok(Self {
@@ -193,9 +299,13 @@ impl DebugSession {
             watchpoints: Mutex::new(Vec::new()),
             step_counter: AtomicU64::new(0),
             last_stop: Mutex::new(None),
-            started: std::sync::atomic::AtomicBool::new(true), // target-select 后停在入口
-            last_rip: Mutex::new(None),
-            remote_host: Some(format!("{user}@{host}")),
+            started: std::sync::atomic::AtomicBool::new(true),
+            remote_host: Some(user_host.clone()),
+            remote: Mutex::new(Some(RemoteHandle {
+                tunnel: tunnel.take().unwrap(),
+                user_host,
+                remote_dir,
+            })),
         })
     }
 
@@ -218,7 +328,7 @@ impl DebugSession {
                 let after = self.snapshot(&mut g);
                 self.step_counter.fetch_add(1, Ordering::SeqCst);
                 // 持锁期内读取机器码(build_report 不再入锁,防死锁)
-                let machine = after
+                let machine = before
                     .iter()
                     .find(|(n, _)| n == self.pc_name())
                     .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -245,7 +355,7 @@ impl DebugSession {
             g.run().map_err(|e| e.to_string())?
         };
         let after = self.snapshot(&mut g);
-        let machine = after
+        let machine = before
             .iter()
             .find(|(n, _)| n == self.pc_name())
             .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -262,7 +372,7 @@ impl DebugSession {
         let before = self.snapshot(&mut g);
         let stop = g.finish().map_err(|e| e.to_string())?;
         let after = self.snapshot(&mut g);
-        let machine = after
+        let machine = before
             .iter()
             .find(|(n, _)| n == self.pc_name())
             .and_then(|(_, v)| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -478,24 +588,19 @@ impl DebugSession {
             }
         }
 
-        // 反汇编:用调用方读好的机器码(锁外);按 ISA 分派(arm64 → yaxpeax)
-        let (disasm, mnemonic, machine_hex) =
-            match lab_adapters::disasm_one_for(&self.arch, &machine, after_map.get(pc_reg).and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0)) {
-                Ok(Some(l)) => (l.text.clone(), l.mnemonic.clone(), l.bytes_hex.clone()),
-                _ => (String::new(), String::new(), String::new()),
-            };
+        // 反汇编刚执行的那条指令(机器码取自 step 前的 PC);按 ISA 分派解码器。
+        let from = before_map.get(pc_reg).and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
+        let decoded = lab_adapters::disasm_one_for(&self.arch, &machine, from).ok().flatten();
+        let (disasm, mnemonic, machine_hex, inst_len) = match &decoded {
+            Some(l) => (l.text.clone(), l.mnemonic.clone(), l.bytes_hex.clone(), l.size as u64),
+            // 无法解码时按 ISA 定长回退:ARM64 固定 4 字节,x86-64 保守取 1
+            None => (String::new(), String::new(), String::new(), if self.arch == "arm64" { 4 } else { 1 }),
+        };
 
         let next_rip = after_map
             .get(pc_reg)
             .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
-        let from = before_map.get(pc_reg).and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
-        // seq_to 用实际指令长度(iced 解析):写死 from+1 会把变长指令顺序执行误标为 branch
-        let inst_len = lab_adapters::iced::disassemble_one(&machine, next_rip)
-            .ok()
-            .flatten()
-            .map(|l| l.size as u64)
-            .unwrap_or(1);
         let kind = crate::classify_jump(if mnemonic.is_empty() { None } else { Some(&mnemonic) }, from + inst_len, next_rip);
 
         // 解释:元数据 + 真实 diff + 源码行
@@ -514,12 +619,13 @@ impl DebugSession {
             detail.push(format!("当前源码行: {} 第 {} 行", stop.frame_file.as_deref().unwrap_or(SOURCE_FILE), line));
         }
 
-        let mem_changes: Vec<MemChangeItem> = Vec::new(); // 模式 B 不做内存写钩子(P3 观察)
+        // 模式 B 没有内存写钩子:如实留空并在解释里标注,不伪造内存变化。
+        let mem_changes: Vec<MemChangeItem> = Vec::new();
 
         StepReport {
             step_no: self.step_counter.load(Ordering::SeqCst),
             address: hx(from),
-            size: 0,
+            size: inst_len as u32,
             machine_bytes_hex: machine_hex,
             disasm,
             mnemonic: mnemonic.clone(),
@@ -536,7 +642,7 @@ impl DebugSession {
                 pitfalls: note.map(|n| n.pitfalls.clone()).unwrap_or_default(),
                 detail,
                 related_cpp: note.and_then(|n| n.related_cpp.clone()),
-                warnings: Vec::new(),
+                warnings: vec!["模式 B 未追踪内存写事件,请在内存面板按地址查看内存变化".into()],
             },
             stop: None,
             source_file: stop.frame_file.clone(),

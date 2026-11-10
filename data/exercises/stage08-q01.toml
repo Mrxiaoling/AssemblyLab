@@ -12,6 +12,13 @@ related_experiment = "stage08-lesson01"
 
 hints.level1 = "write 的返回值 = 实际写入的字节数(桩如实返回 len)。"
 hints.level2 = "RDX=5 → 返回 5;程序把它存进 RBX 再退出,不会被 exit 覆盖。"
+answer_md = """
+Linux x86-64 `write` 系统调用号 1,参数 RDI=fd(2=stderr)、RSI=缓冲区、RDX=字节数(5)。
+本实验的 syscall 是教学桩,如实返回**实际写入的字节数 5**,结果留在 RAX;
+`mov rbx, rax` 转存后 **RBX=5**。随后 `mov rax,60` / `mov edi,5` 发起 exit,
+因此退出时 **RDI=5**(进程退出码)。注意退出码与 write 返回值恰好都是 5,但语义完全不同。
+真实 Linux 上 write 可能因信号中断返回更少的字节,桩只教学化地覆盖常见成功路径。
+"""
 
 [predict]
 exec = "run"

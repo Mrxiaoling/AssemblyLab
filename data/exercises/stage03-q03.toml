@@ -12,6 +12,12 @@ related_experiment = "stage03-lesson04"
 
 hints.level1 = "x86-64 是小端:最低有效字节放在最低地址。"
 hints.level2 = "[val] 处是 0x44,[val+1] 处是 0x33 —— movzx 把字节零扩展进 eax。"
+answer_md = """
+x86-64 是小端:`dd 0x11223344` 在内存中依次为 `44 33 22 11`,最低有效字节 0x44 在最低地址。
+`movzx eax, byte [val]` 读 0x44 并零扩展到 32 位 → **RAX=0x44**(写 EAX 同时清零 RAX 高 32 位);
+`movzx ecx, byte [val+1]` 读 0x33 → **RCX=0x33**。
+若换成大端机,两个结果会变成 0x11 与 0x22——这正是端序影响可观察结果的地方。
+"""
 
 [predict]
 exec = "step:3"

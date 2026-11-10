@@ -4,6 +4,7 @@
 //! 源码写入临时目录(会话结束清理);编译器输出大小截断。
 //! 源码↔汇编映射:objdump -d -l -M intel(与 Compiler Explorer 同思路)。
 
+use crate::process;
 use lab_core::LabError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,33 +56,35 @@ const COMPILE_TIMEOUT_SECS: u64 = 30;
 /// Windows 临时目录 → WSL 路径
 pub fn to_wsl_path(p: &Path) -> Result<String, LabError> {
     let win = p.to_str().ok_or_else(|| LabError::BadRequest("路径非 UTF-8".into()))?;
-    let out = wsl_bash(&format!("wslpath -a '{}'", win.replace('\\', "/").replace("C:", "C:")))?;
+    let fwd = win.replace('\\', "/");
+    if fwd.contains('\'') || fwd.contains('\n') || fwd.contains('$') || fwd.contains('`') {
+        return Err(LabError::BadRequest("临时路径含非法字符".into()));
+    }
+    let out = wsl_bash(&format!("wslpath -a '{fwd}'"))?;
     let s = out.trim().to_string();
     if s.is_empty() {
-        return Err(LabError::ToolUnavailable(format!("wslpath 转换失败: {win}")));
+        return Err(LabError::ToolUnavailable("wslpath 转换失败(详情见服务端日志)".into()));
     }
     Ok(s)
 }
 
+fn wsl_command(script: &str) -> Result<std::process::Output, LabError> {
+    let mut cmd = Command::new("wsl.exe");
+    cmd.args(["-d", WSL_DISTRO, "-e", "bash", "-c", script]);
+    process::run_with_timeout(&mut cmd, process::DEFAULT_TIMEOUT).map_err(|e| {
+        tracing::warn!("WSL 工具调用失败: {e}");
+        LabError::ToolUnavailable("外部工具不可用或超时(详情见服务端日志)".into())
+    })
+}
+
 fn wsl_bash(script: &str) -> Result<String, LabError> {
-    let out = Command::new("wsl.exe")
-        .args(["-d", WSL_DISTRO, "-e", "bash", "-c", script])
-        .output()
-        .map_err(|e| LabError::ToolUnavailable(format!("无法启动 wsl: {e}")))?;
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    Ok(process::stdout_text(&wsl_command(script)?))
 }
 
 fn wsl_bash_checked(script: &str) -> Result<(bool, String, String), LabError> {
-    let out = Command::new("wsl.exe")
-        .args(["-d", WSL_DISTRO, "-e", "bash", "-c", script])
-        .output()
-        .map_err(|e| LabError::ToolUnavailable(format!("无法启动 wsl: {e}")))?;
+    let out = wsl_command(script)?;
     let code = out.status.code().unwrap_or(-1);
-    Ok((
-        code == 0,
-        String::from_utf8_lossy(&out.stdout).to_string(),
-        String::from_utf8_lossy(&out.stderr).to_string(),
-    ))
+    Ok((code == 0, process::stdout_text(&out), process::stderr_text(&out)))
 }
 
 /// 探测 WSL 工具链(health 用)
@@ -173,13 +176,18 @@ pub fn compile(req: &CompileRequest) -> Result<CompileOutput, LabError> {
     let mangled: Vec<String> = asm_lines
         .iter()
         .filter_map(|l| l.function.clone())
-        .filter(|f| f.starts_with("_Z"))
+        .filter(|f| {
+            f.starts_with("_Z")
+                && f.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && f.len() <= 512
+        })
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
     if !mangled.is_empty() {
-        let cmd = format!("echo '{}' | c++filt", mangled.join("
-"));
+        // 每个符号单独加引号并过滤字符,避免符号名里的引号/换行改变 shell 命令结构
+        let args = mangled.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(" ");
+        let cmd = format!("printf '%s\\n' {args} | c++filt");
         let demangled = wsl_bash(&cmd).unwrap_or_default();
         let map: std::collections::HashMap<String, String> = mangled
             .iter()

@@ -68,8 +68,6 @@ const selectedMistakes = computed(() => {
 function goExercise(id: string) {
   window.location.hash = `/exercises?id=${id}`
 }
-
-onMounted(load)
 </script>
 
 <script lang="ts">

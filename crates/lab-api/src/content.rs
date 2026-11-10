@@ -286,16 +286,47 @@ pub async fn get_exercise(
     }))
 }
 
+/// 提交反馈的公开 DTO:刻意不含 `expected`(标准答案/期望执行结果)。
+/// 判题依据只留在服务端,避免「随便提交一次就能从响应里读到答案」。
+#[derive(Serialize)]
+pub struct PublicJudgeItem {
+    pub key: String,
+    pub prompt: String,
+    pub actual: String,
+    pub ok: bool,
+}
+
 #[derive(Serialize)]
 pub struct SubmitResp {
     pub passed: bool,
-    pub items: Vec<lab_judge::JudgeItem>,
+    pub items: Vec<PublicJudgeItem>,
     pub attempt_no: i64,
     pub error: Option<String>,
     /// 提示梯度:第 1 次错误给 level1,第 2 次+给 level2;不通过时附上
     pub hint: Option<String>,
-    /// 主动查看解析(通过后或 attempt_count>=3 后允许)
+}
+
+/// 用户主动点「查看参考解析」时才返回;提交响应永不包含答案。
+#[derive(Serialize)]
+pub struct AnswerResp {
     pub answer_md: Option<String>,
+}
+
+pub async fn get_exercise_answer(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<AnswerResp> {
+    let ex = tokio::task::spawn_blocking({
+        let dir = st.data_dir().to_path_buf();
+        let id = id.clone();
+        move || load_exercise(&dir, &id)
+    })
+    .await
+    .map_err(|e| ApiError(lab_core::LabError::Emulator(e.to_string())))?
+    .ok_or_else(|| ApiError(lab_core::LabError::BadRequest("习题不存在".into())))?;
+    Ok(Json(AnswerResp {
+        answer_md: Some(ex.exercise.answer_md.clone()).filter(|s| !s.is_empty()),
+    }))
 }
 
 pub async fn submit_exercise(
@@ -327,7 +358,15 @@ pub async fn submit_exercise(
     .await
     .map_err(|e| ApiError(lab_core::LabError::Emulator(e.to_string())))?;
 
-    let status = if judged.passed { "passed" } else { "wrong" };
+    // 自评题(诚实模式)没有机器可验证的判题依据,不计入掌握度、不触发进度更新。
+    let verified = ex.self_check.is_none();
+    let status = if !judged.passed {
+        "wrong"
+    } else if verified {
+        "passed"
+    } else {
+        "self_check"
+    };
     let ex_id = ex.exercise.id.clone();
     let attempt_no = st
         .storage()
@@ -349,14 +388,10 @@ pub async fn submit_exercise(
     } else {
         Some(ex.exercise.hints.level2.clone()).filter(|s| !s.is_empty())
     };
-    // 已看过 3 次仍错 → 展示参考解析(README 反馈机制:主动看答案才给全解,这里温和放开)
-    let answer_md = if judged.passed || attempt_no >= 3 {
-        Some(ex.exercise.answer_md.clone()).filter(|s| !s.is_empty())
-    } else {
-        None
-    };
+    // 参考解析不再随提交返回:由用户主动调用 /api/exercises/{id}/answer 获取。
+    // (README 反馈机制:第一次错误给方向性提示,用户主动看答案才给全解)
 
-    if judged.passed {
+    if judged.passed && verified {
         let lesson = ex.exercise.lesson.clone();
         if let Some(s) = st.storage() {
             let _ = s.set_progress(&lesson, "in_progress");
@@ -365,11 +400,19 @@ pub async fn submit_exercise(
 
     Ok(Json(SubmitResp {
         passed: judged.passed,
-        items: judged.items,
+        items: judged
+            .items
+            .into_iter()
+            .map(|i| PublicJudgeItem {
+                key: i.key,
+                prompt: i.prompt,
+                actual: i.actual,
+                ok: i.ok,
+            })
+            .collect(),
         attempt_no: judged.attempt_no.max(attempt_no),
         error: judged.error,
         hint,
-        answer_md,
     }))
 }
 

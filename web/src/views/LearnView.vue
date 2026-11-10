@@ -3,7 +3,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  NCard, NTag, NButton, NList, NListItem, NThing, NSpace, NEmpty, NProgress, NSpin,
+  NCard, NTag, NButton, NList, NListItem, NThing, NSpace, NEmpty, NProgress, NSpin, NAlert,
 } from 'naive-ui'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -17,20 +17,35 @@ const route = useRoute()
 const lessons = ref<LessonListItem[]>([])
 const current = ref<Record<string, any> | null>(null)
 const loading = ref(false)
+const error = ref('')
+const notice = ref('')
+
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 const lessonId = computed(() => String(route.query.lesson ?? ''))
 
 async function loadList() {
-  lessons.value = await api.courses()
-  if (lessons.value.length) {
-    await openLesson(lessonId.value || lessons.value[0].id)
+  error.value = ''
+  try {
+    lessons.value = await api.courses()
+    if (lessons.value.length) {
+      await openLesson(lessonId.value || lessons.value[0].id)
+    }
+  } catch (e) {
+    error.value = `课程列表加载失败: ${msgOf(e)}`
   }
 }
 
 async function openLesson(id: string) {
   loading.value = true
+  error.value = ''
+  notice.value = ''
   try {
     current.value = (await api.course(id)) as Record<string, any>
+  } catch (e) {
+    error.value = `课程打开失败: ${msgOf(e)}`
   } finally {
     loading.value = false
   }
@@ -38,17 +53,37 @@ async function openLesson(id: string) {
 
 async function openExperiment() {
   if (!current.value) return
-  const src: CourseSource = await api.courseExperiment(current.value.id)
-  const payload = encodeURIComponent(src.source)
-  // 按 experiment.mode 路由(P3):asm=模式A工作台 / debug=真机调试 / compare=优化对比
-  const isa = src.isa && src.isa !== 'x86-64' ? `&isa=${encodeURIComponent(src.isa)}` : ''
-  if (src.mode === 'debug') {
-    const cmp = src.compiler && src.compiler !== 'g++' ? `&cmp=${encodeURIComponent(src.compiler)}` : ''
-    window.location.hash = `/debug?exp=${payload}${cmp}`
-  } else if (src.mode === 'compare') {
-    window.location.hash = `/compare?exp=${payload}`
-  } else {
-    window.location.hash = `/workbench?exp=${payload}${isa}`
+  error.value = ''
+  try {
+    const src: CourseSource = await api.courseExperiment(current.value.id)
+    const payload = encodeURIComponent(src.source)
+    // 按 experiment.mode 路由(P3):asm=模式A工作台 / debug=真机调试 / compare=优化对比
+    const isa = src.isa && src.isa !== 'x86-64' ? `&isa=${encodeURIComponent(src.isa)}` : ''
+    if (src.mode === 'debug') {
+      const cmp = src.compiler && src.compiler !== 'g++' ? `&cmp=${encodeURIComponent(src.compiler)}` : ''
+      window.location.hash = `/debug?exp=${payload}${cmp}`
+    } else if (src.mode === 'compare') {
+      window.location.hash = `/compare?exp=${payload}`
+    } else {
+      window.location.hash = `/workbench?exp=${payload}${isa}`
+    }
+  } catch (e) {
+    error.value = `实验入口加载失败: ${msgOf(e)}`
+  }
+}
+
+async function markDone() {
+  if (!current.value) return
+  error.value = ''
+  notice.value = ''
+  try {
+    await api.setProgress(current.value.id, 'done')
+    const item = lessons.value.find((l) => l.id === current.value?.id)
+    if (item) item.progress = 'done'
+    if (current.value) current.value.progress = 'done'
+    notice.value = '已标记为完成'
+  } catch (e) {
+    error.value = `进度保存失败: ${msgOf(e)}`
   }
 }
 
@@ -92,6 +127,12 @@ onMounted(loadList)
 
     <!-- 右:课程内容 -->
     <div class="content">
+      <n-alert v-if="error" type="error" size="small" closable @close="error = ''" style="margin-bottom: 8px">
+        {{ error }}
+      </n-alert>
+      <n-alert v-if="notice" type="success" size="small" closable @close="notice = ''" style="margin-bottom: 8px">
+        {{ notice }}
+      </n-alert>
       <n-spin :show="loading">
         <n-empty v-if="!current" description="选择左侧课程开始学习" style="margin-top: 20vh" />
         <template v-else>
@@ -103,10 +144,7 @@ onMounted(loadList)
               <n-button type="primary" size="small" @click="openExperiment">
                 ⚗ 打开本课实验(工作台)
               </n-button>
-              <n-button
-                size="small"
-                @click="api.setProgress(current.id, 'done')"
-              >
+              <n-button size="small" @click="markDone">
                 标记已完成
               </n-button>
             </n-space>

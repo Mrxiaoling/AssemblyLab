@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NAlert } from 'naive-ui'
 import ControlBar from '../components/workbench/ControlBar.vue'
@@ -8,12 +8,43 @@ import DisasmPane from '../components/workbench/DisasmPane.vue'
 import RegisterPanel from '../components/workbench/RegisterPanel.vue'
 import FlagsPanel from '../components/workbench/FlagsPanel.vue'
 import MemoryViewer from '../components/workbench/MemoryViewer.vue'
+import StackViewer from '../components/workbench/StackViewer.vue'
 import TracePanel from '../components/workbench/TracePanel.vue'
 import ExplainCard from '../components/workbench/ExplainCard.vue'
 import { useSessionStore, defaultSourceFor } from '../stores/session'
 
 const store = useSessionStore()
 const route = useRoute()
+
+// 三列宽度可拖拽,比例持久化到 localStorage(ROADMAP T1.x 的布局持久化要求)
+const COLS_KEY = 'assemblylab.workbench.cols'
+const colSizes = ref<number[]>([32, 36, 32])
+onMounted(() => {
+  try {
+    const raw = localStorage.getItem(COLS_KEY)
+    if (!raw) return
+    const v: unknown = JSON.parse(raw)
+    if (
+      Array.isArray(v) && v.length === 3 &&
+      v.every((n) => typeof n === 'number' && n >= 10) &&
+      Math.abs(v.reduce((a: number, b: number) => a + b, 0) - 100) < 2
+    ) {
+      colSizes.value = v as number[]
+    }
+  } catch {
+    // localStorage 不可用(隐私模式/file://)时用默认比例
+  }
+})
+function onResized(panes: { size: number }[]) {
+  if (!Array.isArray(panes) || panes.length !== 3) return
+  colSizes.value = panes.map((p) => p.size)
+  try {
+    localStorage.setItem(COLS_KEY, JSON.stringify(colSizes.value))
+  } catch {
+    // 忽略持久化失败
+  }
+}
+
 // 课程实验入口:workbench→workbench 同组件复用时 route.query 变化不触发 onMounted,
 // 用 watch(immediate) 监听 exp/isa 变化重建会话(记录上次值防重复)
 let lastExp: string | null = null
@@ -47,29 +78,32 @@ watch(
     </n-alert>
 
     <div class="wb-main">
-      <!-- 左:源码 + 解释卡 -->
-      <splitpanes class="default-theme" :vertical="true" style="flex: 1 1 32%">
-        <pane :size="62">
-          <CodePane />
+      <splitpanes class="default-theme wb-cols" @resized="onResized">
+        <!-- 左:源码 + 解释卡 -->
+        <pane :size="colSizes[0]" min-size="12">
+          <splitpanes class="default-theme" :vertical="true">
+            <pane :size="62"><CodePane /></pane>
+            <pane :size="38"><ExplainCard /></pane>
+          </splitpanes>
         </pane>
-        <pane :size="38">
-          <ExplainCard />
-        </pane>
-      </splitpanes>
 
-      <!-- 中:反汇编 -->
-      <div style="flex: 1 1 36%; min-width: 0; display: flex; flex-direction: column">
-        <DisasmPane />
-      </div>
-
-      <!-- 右:寄存器/标志/内存 -->
-      <splitpanes class="default-theme" :vertical="true" style="flex: 1 1 32%">
-        <pane :size="46">
-          <RegisterPanel />
-          <FlagsPanel />
+        <!-- 中:反汇编(点击指令关联源码行) -->
+        <pane :size="colSizes[1]" min-size="12">
+          <DisasmPane />
         </pane>
-        <pane :size="54">
-          <MemoryViewer />
+
+        <!-- 右:寄存器/标志 + 内存 + 栈帧 -->
+        <pane :size="colSizes[2]" min-size="12">
+          <splitpanes class="default-theme" :vertical="true">
+            <pane :size="34">
+              <div class="stacked">
+                <RegisterPanel />
+                <FlagsPanel />
+              </div>
+            </pane>
+            <pane :size="33"><MemoryViewer /></pane>
+            <pane :size="33"><StackViewer /></pane>
+          </splitpanes>
         </pane>
       </splitpanes>
     </div>
@@ -102,6 +136,17 @@ export default {
 }
 .wb-main > * {
   min-width: 0;
+  flex: 1;
+}
+.stacked {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stacked > * {
+  flex: 1;
+  min-height: 0;
 }
 .panel {
   border: 1px solid #2a2a2a;

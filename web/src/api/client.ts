@@ -20,11 +20,14 @@ export class ApiError extends Error {
   }
 }
 
+const API_TOKEN = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
+  ?.VITE_API_TOKEN;
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  })
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (API_TOKEN) headers.set('X-AssemblyLab-Token', API_TOKEN);
+  const resp = await fetch(url, { ...init, headers });
   if (!resp.ok) {
     let body: ApiErrorBody | null = null
     try {
@@ -66,10 +69,31 @@ export interface CourseSource {
   compiler: string
 }
 
+export interface TutorResp {
+  layers: { quick: string; deep: string[]; hands_on: string[] }
+  matched_nodes: string[]
+  blindspots: string[]
+  recommended: [string, string][]
+  related_nodes: string[]
+  related_lessons: [string, string][]
+}
+
+export interface LlmStatusResp {
+  configured: boolean
+  model: string | null
+  secure: boolean
+  hint: string
+}
+
+export interface LlmResp {
+  model: string
+  answer: string
+  context_notes: number
+}
+
 export interface JudgeItem {
   key: string
   prompt: string
-  expected: string
   actual: string
   ok: boolean
 }
@@ -80,7 +104,6 @@ export interface SubmitResp {
   attempt_no: number
   error: string | null
   hint: string | null
-  answer_md: string | null
 }
 
 export interface DebugSessionResp {
@@ -98,10 +121,10 @@ export interface DebugStepResp {
 }
 
 export const api = {
-  debugCreate: (source: string, opt: string, compiler = 'g++') =>
+  debugCreate: (source: string, opt: string, compiler = 'g++', isa = 'x86-64') =>
     request<DebugSessionResp>('/api/debug/sessions', {
       method: 'POST',
-      body: JSON.stringify({ source, opt, compiler }),
+      body: JSON.stringify({ source, opt, compiler, isa }),
     }),
 
   debugRun: (id: number) =>
@@ -151,6 +174,20 @@ export const api = {
       timeline_error: string | null
     }>(`/api/debug/sessions/${id}/coro`),
 
+  tutor: (question: string) =>
+    request<TutorResp>('/api/tutor', {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+
+  tutorLlmStatus: () => request<LlmStatusResp>('/api/tutor/llm/status'),
+
+  tutorLlm: (question: string) =>
+    request<LlmResp>('/api/tutor/llm', {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+
   compareAsm: (source: string, opts: string[], compiler = 'g++') =>
     request<import('./types').CompareEntry[]>('/api/compare', {
       method: 'POST',
@@ -172,6 +209,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ answers }),
     }),
+
+  exerciseAnswer: (id: string) =>
+    request<{ answer_md: string | null }>(`/api/exercises/${id}/answer`),
 
   setProgress: (id: string, status: string) =>
     request<{ lesson_id: string; status: string }>(`/api/progress/${id}`, {

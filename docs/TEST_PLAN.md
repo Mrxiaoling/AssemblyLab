@@ -17,7 +17,7 @@
  单元测试(diff 计算、judge、DWARF 解析、DTO 序列化)
 ```
 
-运行入口:`cargo test --workspace`(后端全部)+ `npm run test`(vitest)+ `cargo run -p lab-content-check`(内容一致性,见 §5)。
+运行入口:`cargo test --workspace`(后端全部)+ `npm run test`(vitest)+ `cargo test -p lab-judge --test content_tests course_golden_values_match_real_execution`(课程正文数值一致性,见 §5)。
 
 ## 2. 引擎语义测试(模式 A 正确性)
 
@@ -68,7 +68,7 @@
 
 ## 5. 教学内容一致性测试(README 十二节「教学内容测试」逐条落地)
 
-1. **实验能否运行**:`lab-content-check` 遍历所有课程,提取实验定义 → 真实汇编+装载+执行,任何失败即构建失败。
+1. **实验能否运行**:`content_tests::mode_a_experiments_actually_run` 遍历所有课程,提取实验定义 → 真实汇编+装载+逐步执行,任何失败即测试失败。
 2. **参考结果正确**:每实验 golden(`expected-*.json`)与引擎实际执行全量比对;「参考结论文案中的数值」用模板引用 golden,杜绝手抄数字。
 3. **习题判题准确**:每题自带 `judge_cases`(正确答案、典型错误答案、边界);判题器逐例断言(含提示梯度行为:第一次错误→提示1,第二次→提示2,主动看答案→解析)。
 4. **内容与真实执行一致**:正文 content.md 中出现的寄存器值/标志结论若用 `{{exp:swap:step:4:reg:RAX}}` 模板语法,则渲染时取 golden,构建时校验模板可解析(禁止手写数值进入正文的关键位置)。
@@ -103,7 +103,7 @@
 | # | 决策 | 备选 | 理由 |
 |---|---|---|---|
 | D-TST-1 | 引擎正确性用 golden JSON 全量快照,人工复核后入库 | 只断言最终值 | 中间步进错误(如标志位错)只看终值发现不了;golden 让任何行为变化可见 |
-| D-TST-2 | 内容一致性作为独立构建步骤(lab-content-check) | 只靠人工核对 | README 十一节第 6/7 条的机械化落实 |
+| D-TST-2 | 内容一致性作为 `content_tests` 集成测试(非独立二进制) | 只靠人工核对 | README 十一节第 6/7 条的机械化落实;早期设计的 `lab-content-check` 独立 crate 未创建 |
 | D-TST-3 | 正文关键数值用模板引用 golden | 手写数字 + 复查 | 教学文案与执行真值强绑定,改实验自动暴露过期文案 |
 | D-TST-4 | E2E 用手动清单起步,Playwright 延后 | 直接上 Playwright | 本地单用户工具,先保验收效率,前端稳定后再自动化 |
 
@@ -113,5 +113,5 @@
 
 - **WSL 依赖**:compiler_tests / debug_tests(真实 g++/gdb)依赖 WSL2 Ubuntu-22.04 + g++/gdb/socat。已加运行时探测(`wsl_available()`):WSL 不可用时**跳过并输出 skip 日志**(CI/其他机器不再大面积失败);wsl_probe 默认 `#[ignore]`。
 - **纯本地测试**(无 WSL 依赖):unicorn / nasm / iced / isa / judge / engine / content_tests 在任意 Linux/Windows 机器可跑。
-- ** Golden/正文数值**:课程正文中的寄存器数值目前手写并与实验源码绑定(改源码需同步正文);content_tests 的模式 A 校验保证实验本身可跑通,正文数值的自动比对列为 P8 项。
-- **前端**:vue-tsc 类型检查 + vite build;vitest 覆盖 memdecode 解码逻辑(端序/浮点/符号)。
+- **Golden/正文数值**:已建立 `[[lesson.experiment.golden]]`(step/reg/value)+ `content_tests::course_golden_values_match_real_execution`,用真实模拟引擎逐步取寄存器快照比对,改实验源码却忘改正文会失败。**当前仅 stage01-lesson01 声明了 3 条 golden**,其余 26 门课正文数值仍为手写,逐课补齐属后续工作。习题 `answer_md` 已 20/20 覆盖,并有断言防止回落。
+- **前端**:vue-tsc 类型检查 + vite build;vitest 覆盖 memdecode 解码逻辑(8 用例)与 `utils/diff.ts` 的 LCS/行数上限(6 用例)。

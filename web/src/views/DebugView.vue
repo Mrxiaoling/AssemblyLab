@@ -29,6 +29,11 @@ const compilerOptions = [
   { label: 'g++ (SysV)', value: 'g++' },
   { label: 'clang++ (协程帧最完整)', value: 'clang++' },
 ]
+const targetIsa = ref('x86-64')
+const isaOptions = [
+  { label: 'x86-64 (本地 WSL)', value: 'x86-64' },
+  { label: 'ARM64 (远程真机)', value: 'arm64' },
+]
 const sessionId = ref<number | null>(null)
 const busy = ref(false)
 const error = ref('')
@@ -157,13 +162,20 @@ onMounted(() => {
 })
 let cppSource2 = cppSource
 
+function revealSource(line: number | null | undefined) {
+  if (!editor || !line) return
+  editor.revealLineInCenter(line)
+  editor.setPosition({ lineNumber: line, column: 1 })
+  editor.focus()
+}
+
 onBeforeUnmount(() => editor?.dispose())
 
 async function startDebug() {
   busy.value = true
   error.value = ''
   try {
-    const resp = await api.debugCreate(cppSource2, optLevel.value, compiler.value)
+    const resp = await api.debugCreate(cppSource2, optLevel.value, compiler.value, targetIsa.value)
     sessionId.value = resp.id
     asmLines.value = resp.asm_lines
     compileInfo.value = `${resp.compiler} · ${resp.opt}`
@@ -332,6 +344,7 @@ export default { name: 'DebugView' }
         </n-button>
         <n-select v-model:value="optLevel" size="small" :options="optOptions" style="width: 90px" />
         <n-select v-model:value="compiler" size="small" :options="compilerOptions" style="width: 190px" />
+        <n-select v-model:value="targetIsa" size="small" :options="isaOptions" style="width: 165px" />
       </n-button-group>
       <n-button-group size="small">
         <n-button :disabled="!sessionId || busy" @click="op('run')">▶ 继续</n-button>
@@ -347,6 +360,14 @@ export default { name: 'DebugView' }
       <n-tag size="small" type="warning">隔离等级:进程级限制(非强沙箱)</n-tag>
     </div>
     <n-alert v-if="error" type="error" size="small" closable @close="error = ''">{{ error }}</n-alert>
+    <n-alert v-if="targetIsa === 'arm64'" type="warning" size="small" style="margin-top:6px">
+      ARM64 远程真机默认关闭:后端需设置 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1、ASSEMBLYLAB_ENABLE_ARM64_REMOTE=1,
+      并显式配置 ASSEMBLYLAB_ARM64_HOST / ASSEMBLYLAB_ARM64_USER(免密 ssh);固定使用 aarch64-linux-gnu-g++ 交叉编译,
+      gdbserver 只绑远端回环并经 ssh 隧道连接。
+    </n-alert>
+    <n-alert v-else type="warning" size="small" style="margin-top:6px">
+      模式 B 默认关闭:需以 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1 启动后端。隔离等级为进程级限制(非强沙箱),请勿运行不可信代码。
+    </n-alert>
 
     <div class="dbg-main">
       <splitpanes class="default-theme">
@@ -361,11 +382,12 @@ export default { name: 'DebugView' }
         <!-- 反汇编(编译产物,含源码行标注) -->
         <pane :size="33">
           <div class="panel" style="height: 100%">
-            <div class="panel-title">编译产物反汇编(g++ -g)</div>
+            <div class="panel-title">编译产物反汇编(g++ -g) <span style="color:#555">(点击带 → 的行定位源码)</span></div>
             <div class="panel-body">
               <table class="disasm">
                 <tbody>
-                  <tr v-for="(l, i) in asmLines" :key="i" :class="{ 'src-mark': l.source_line }">
+                  <tr v-for="(l, i) in asmLines" :key="i" :class="{ 'src-mark': l.source_line }"
+                      @click="revealSource(l.source_line)">
                     <td class="addr-col">{{ l.addr ? '0x' + l.addr.slice(2) : '' }}</td>
                     <td class="line-col">{{ l.source_line ? '→ ' + l.source_line : '' }}</td>
                     <td class="text-col">{{ l.text }}</td>

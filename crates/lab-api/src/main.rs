@@ -6,6 +6,7 @@ mod content;
 mod debug;
 mod export;
 mod knowledge;
+mod security;
 mod tutor;
 mod tutor_llm;
 
@@ -17,6 +18,19 @@ async fn main() {
     tracing_subscriber_init();
     sweep_temp_dirs();
     let state = api::AppState::new();
+    // 空闲会话回收:每 60s 清理 30 分钟未访问的会话(模式 B 会顺带清掉远端 gdbserver)
+    {
+        let sweeper = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let ttl = std::time::Duration::from_secs(30 * 60);
+                sweeper.sweep_expired(ttl);
+                sweeper.debug_sessions.sweep(ttl);
+            }
+        });
+    }
     let base = Router::new()
         .route("/api/health", get(api::health))
         .route("/api/isas", get(api::list_isas))
@@ -39,11 +53,13 @@ async fn main() {
         .route("/api/exercises", get(content::list_exercises))
         .route("/api/exercises/{id}", get(content::get_exercise))
         .route("/api/exercises/{id}/submit", post(content::submit_exercise))
+        .route("/api/exercises/{id}/answer", get(content::get_exercise_answer))
         .route("/api/progress/{id}", get(content::get_progress).put(content::put_progress))
         .route("/api/knowledge", get(knowledge::get_knowledge))
         .route("/api/mistakes", get(knowledge::get_mistakes))
         .route("/api/tutor", post(tutor::tutor))
         .route("/api/tutor/llm", post(tutor_llm::tutor_llm))
+        .route("/api/tutor/llm/status", get(tutor_llm::status))
         .route("/api/export/course/{id}", get(export::export_course))
         .route("/api/export/all", get(export::export_all));
 
@@ -63,24 +79,37 @@ async fn main() {
             .route("/api/debug/sessions/{id}/coro", get(debug::get_coro))
             .route("/api/debug/sessions/{id}/frames", get(debug::get_frames))
             .route("/api/debug/sessions/{id}/memory", get(debug::get_memory))
-            .with_state(state)
+            .with_state(state.clone())
     } else {
-        base.with_state(state)
+        base.with_state(state.clone())
             .route(
                 "/api/debug/{*rest}",
                 axum::routing::any(|| async {
-                    axum::Json(serde_json::json!({
-                        "error": {
-                            "kind": "debug_disabled",
-                            "message": "模式 B(真机调试)默认关闭:隔离等级为进程级限制,非强沙箱。知情后以 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1 启动后端开启。"
-                        }
-                    }))
+                    (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": {
+                                "kind": "debug_disabled",
+                                "message": "模式 B(真机调试)默认关闭:隔离等级为进程级限制,非强沙箱。知情后以 ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1 启动后端开启。"
+                            }
+                        })),
+                    )
                 }),
             )
-    };
+    }
+    .layer(axum::middleware::from_fn(security::guard));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:7600").await.unwrap();
-    tracing::info!("Assembly Lab API listening on http://127.0.0.1:7600");
+    let token_on = std::env::var("ASSEMBLYLAB_API_TOKEN")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    tracing::info!("本地 API 防护已启用(token={}, 模式 B={})", token_on, if unsafe_debug { "开启" } else { "关闭" });
+
+    let port: u16 = std::env::var("ASSEMBLYLAB_PORT")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(7600);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    tracing::info!("Assembly Lab API listening on http://127.0.0.1:{port}");
     axum::serve(listener, app).await.unwrap();
 }
 

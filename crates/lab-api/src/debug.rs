@@ -12,26 +12,69 @@ use std::sync::{Arc, Mutex};
 
 pub type DebugRef = Arc<DebugSession>;
 
+/// 模式 B 每个会话都持有 gdb/socat(ARM64 还含 ssh 隧道与远端 gdbserver),必须限量。
+pub const MAX_DEBUG_SESSIONS: usize = 8;
+
 #[derive(Clone)]
 pub struct DebugState {
     sessions: Arc<Mutex<HashMap<u64, DebugRef>>>,
+    last_used: Arc<Mutex<HashMap<u64, std::time::Instant>>>,
     next_id: Arc<AtomicU64>,
 }
 
 impl DebugState {
     pub fn new() -> Self {
-        Self { sessions: Arc::new(Mutex::new(HashMap::new())), next_id: Arc::new(AtomicU64::new(1)) }
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            last_used: Arc::new(Mutex::new(HashMap::new())),
+            next_id: Arc::new(AtomicU64::new(1)),
+        }
     }
+
+    pub fn can_create(&self) -> bool {
+        self.sweep(std::time::Duration::from_secs(30 * 60));
+        self.sessions.lock().unwrap().len() < MAX_DEBUG_SESSIONS
+    }
+
     fn insert(&self, s: DebugSession) -> u64 {
         let id = s.id;
         self.sessions.lock().unwrap().insert(id, Arc::new(s));
+        self.last_used.lock().unwrap().insert(id, std::time::Instant::now());
         id
     }
     fn get(&self, id: u64) -> Option<DebugRef> {
-        self.sessions.lock().unwrap().get(&id).cloned()
+        let s = self.sessions.lock().unwrap().get(&id).cloned();
+        if s.is_some() {
+            self.last_used.lock().unwrap().insert(id, std::time::Instant::now());
+        }
+        s
     }
     fn remove(&self, id: u64) -> Option<DebugRef> {
+        self.last_used.lock().unwrap().remove(&id);
         self.sessions.lock().unwrap().remove(&id)
+    }
+
+    /// 回收空闲会话;移除 Arc 后 DebugSession::drop 会清理远端 gdbserver 与临时目录。
+    pub fn sweep(&self, ttl: std::time::Duration) {
+        let now = std::time::Instant::now();
+        let mut expired = Vec::new();
+        if let Ok(mut used) = self.last_used.lock() {
+            used.retain(|id, t| {
+                let keep = now.duration_since(*t) < ttl;
+                if !keep {
+                    expired.push(*id);
+                }
+                keep
+            });
+        }
+        if !expired.is_empty() {
+            let n = expired.len();
+            let mut sessions = self.sessions.lock().unwrap();
+            for id in expired {
+                sessions.remove(&id);
+            }
+            tracing::info!("已回收 {n} 个空闲调试会话");
+        }
     }
 }
 
@@ -158,6 +201,11 @@ pub async fn create_session(
     State(app): State<AppState>,
     Json(req): Json<CreateDebugReq>,
 ) -> ApiResult<DebugSessionResp> {
+    if !app.debug_sessions.can_create() {
+        return Err(ApiError(LabError::BadRequest(format!(
+            "模式 B 会话数已达上限 {MAX_DEBUG_SESSIONS},请先删除旧会话"
+        ))));
+    }
     let isa: IsaDefinition = app.load_isa(if req.isa.is_empty() { "x86-64" } else { &req.isa }).map_err(ApiError)?;
     let id = app.debug_sessions.next_id.fetch_add(1, Ordering::SeqCst);
     let source = req.source.clone();

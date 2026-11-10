@@ -16,7 +16,14 @@ function isCurrent(addr: string): boolean {
   return addr.toLowerCase() === currentAddr.value
 }
 
-async function onRowClick(addr: string) {
+async function onRowClick(addr: string, event: MouseEvent) {
+  // 点击断点列只切换断点;点击其它区域则关联到对应源码行(README 工作台交互要求)
+  const target = event.target as HTMLElement
+  if (!target.classList.contains('bp-col')) {
+    const lm = store.image?.line_map.find((m) => m.addr.toLowerCase() === addr.toLowerCase())
+    store.focusSourceLine = lm ? lm.line : null
+    return
+  }
   await store.toggleBreakpoint(addr.toLowerCase())
 }
 
@@ -33,7 +40,7 @@ watch(currentAddr, async (a) => {
   <div class="panel" style="height: 100%">
     <div class="panel-title">
       反汇编
-      <span style="color: #555">(点击行设/删断点)</span>
+      <span style="color: #555">(点击 ● 列设断点,点击指令关联源码行)</span>
     </div>
     <div ref="bodyEl" class="panel-body">
       <table class="disasm">
@@ -43,7 +50,7 @@ watch(currentAddr, async (a) => {
             :key="l.address"
             :data-addr="l.address.toLowerCase()"
             :class="{ current: isCurrent(l.address), bp: isBp(l.address) }"
-            @click="onRowClick(l.address)"
+            @click="onRowClick(l.address, $event)"
           >
             <td class="bp-col">{{ isBp(l.address) ? '●' : '·' }}</td>
             <td class="addr-col">{{ l.address }}</td>

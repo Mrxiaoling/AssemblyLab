@@ -13,6 +13,7 @@ const list = ref<ExerciseListItem[]>([])
 const detail = ref<Record<string, any> | null>(null)
 const answers = ref<Record<string, string>>({})
 const result = ref<SubmitResp | null>(null)
+const answerMd = ref<string | null>(null)
 const busy = ref(false)
 const error = ref('')
 
@@ -41,6 +42,7 @@ async function loadList() {
 async function openExercise(id: string) {
   busy.value = true
   result.value = null
+  answerMd.value = null
   error.value = ''
   try {
     detail.value = (await api.exerciseDetail(id)) as Record<string, any>
@@ -66,6 +68,19 @@ async function submit() {
     error.value = String((e as Error).message)
   } finally {
     busy.value = false
+  }
+}
+
+// 参考解析由用户主动查看:提交响应不再包含答案,避免一次空提交即可读到标准答案
+async function revealAnswer() {
+  if (!detail.value) return
+  error.value = ''
+  try {
+    const r = await api.exerciseAnswer(detail.value.id)
+    answerMd.value = r.answer_md
+    if (!answerMd.value) error.value = '这道题尚未提供文字参考解析。'
+  } catch (e) {
+    error.value = String((e as Error).message)
   }
 }
 
@@ -212,7 +227,7 @@ onMounted(loadList)
                   <span style="color:#888; font-size:13px">
                     你的答案: {{ i.actual }} ·
                     <template v-if="i.ok">正确</template>
-                    <template v-else>真实结果: <b style="color:#63e2b7">{{ i.expected }}</b></template>
+                    <template v-else>不正确(参考答案不会在此展示,请先按提示重试)</template>
                   </span>
                 </n-thing>
               </n-list-item>
@@ -229,12 +244,15 @@ onMounted(loadList)
             </n-alert>
           </n-card>
 
-          <!-- 参考解析(通过后或多次尝试后) -->
-          <n-collapse v-if="result?.answer_md" style="margin-bottom: 40px">
-            <n-collapse-item title="参考解析" name="ans">
-              <div class="answer">{{ result.answer_md }}</div>
-            </n-collapse-item>
-          </n-collapse>
+          <!-- 参考解析:仅用户主动点击查看 -->
+          <div style="margin: 12px 0 40px">
+            <n-button size="small" secondary @click="revealAnswer">📖 查看参考解析(主动查看)</n-button>
+            <n-collapse v-if="answerMd" style="margin-top: 10px">
+              <n-collapse-item title="参考解析" name="ans">
+                <div class="answer">{{ answerMd }}</div>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
         </template>
       </n-spin>
     </div>

@@ -12,6 +12,13 @@ related_experiment = "stage01-lesson01"
 
 hints.level1 = "缺的是把 RBX 加到 RAX 上的那条指令。"
 hints.level2 = "`add rax, rbx`(大小写均可)。"
+answer_md = """
+空格填 `add rax, rbx`。`mov eax,10` 与 `mov ebx,20` 后 RAX=10、RBX=20;`add rax, rbx` 得 RAX=30(0x1e);
+`mov [0x400100], rax` 按小端写入 8 字节 `1e 00 00 00 00 00 00 00`。
+判题器用真实模拟引擎执行补全后的程序,同时校验退出码 3 与 0x400100 处的 qword 值 0x1e——
+只填对指令但写错目标宽度或地址一样不通过。
+"""
+common_mistakes = ["用 `add eax, ebx` 却漏掉写回内存", "误以为 mov 只写 4 字节"]
 
 [fill_blank]
 hole_hint = "一条指令:完成 RAX = RAX + RBX"

@@ -13,6 +13,13 @@ related_experiment = "stage10-lesson02"
 
 hints.level1 = "结果经 X19 转存(避免被退出路径覆盖);fact 返回值固定在 X0。"
 hints.level2 = "4! = 24 = 0x18。"
+answer_md = """
+`fact(4) = 24 = 0x18`,AAPCS64 把整数返回值放 X0;`mov x19, x0` 转存 → **X19=0x18**。
+每层递归用 `stp x0, xzr, [sp,#-16]!` 把当前 n 压栈,返回时 `ldp x1, xzr, [sp],#16` 取回;
+栈是 LIFO,最后一层展开的是最外层保存的 n=4,因此退出时 **X1=4**。
+X19 是被调用者保存(callee-saved)寄存器,适合跨 `bl` 保存结果;若用 X0 保存,
+`mov x0,#0`(exit 参数)会把它覆盖。退出前 `mov x8,#93` 是 AArch64 的 exit 系统调用号。
+"""
 
 [predict]
 exec = "run"

@@ -6,6 +6,7 @@ import { NButton, NSelect, NTag, NAlert, NSpin } from 'naive-ui'
 import * as monaco from 'monaco-editor'
 import { api } from '../api/client'
 import type { CompareEntry } from '../api/types'
+import { DIFF_LINE_LIMIT, lcsDiff, normalizeAsm } from '../utils/diff'
 
 const DEFAULT_SOURCE = `// 同一份代码,四个优化级别能差多少?
 // 试着:1) 先点「编译对比」 2) 把 n 改成 100 再对比 3) 打开 -O2 观察循环去哪了
@@ -108,34 +109,32 @@ function insCount(e: CompareEntry) {
 
 const optColors: Record<string, string> = { O0: '#e69055', O1: '#63e2b7', O2: '#82aaff', O3: '#e05f9b' }
 
-// 逐行对照(恰好两列时):按归一化文本(忽略地址)LCS 对齐
+// 逐行对照:算法在 utils/diff.ts(纯函数,有单测);这里只做门控与视图状态。
+// 只在用户打开 diffMode 时计算,行数超限直接拒绝,避免 O(n·m) 阻塞主线程。
 const diffMode = ref(false)
-const diffPair = computed(() => {
+const onlyDiff = ref(false)
+
+const diffInput = computed(() => {
   if (entries.value.length !== 2) return null
   const [a, b] = entries.value
-  const norm = (l: { text: string }) => l.text.replace(/\s+/g, ' ').trim()
-  const aTexts = a.asm_lines.filter((l) => l.addr).map((l) => norm(l))
-  const bTexts = b.asm_lines.filter((l) => l.addr).map((l) => norm(l))
-  const dp = Array.from({ length: aTexts.length + 1 }, () => new Array(bTexts.length + 1).fill(0))
-  for (let i = aTexts.length - 1; i >= 0; i--) {
-    for (let j = bTexts.length - 1; j >= 0; j--) {
-      dp[i][j] = aTexts[i] === bTexts[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
-    }
+  return {
+    a: a.asm_lines.filter((l) => l.addr).map((l) => normalizeAsm(l.text)),
+    b: b.asm_lines.filter((l) => l.addr).map((l) => normalizeAsm(l.text)),
   }
-  const rows: { a: string | null; b: string | null; same: boolean }[] = []
-  let i = 0, j = 0
-  while (i < aTexts.length && j < bTexts.length) {
-    if (aTexts[i] === bTexts[j]) {
-      rows.push({ a: aTexts[i], b: bTexts[j], same: true }); i++; j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      rows.push({ a: aTexts[i], b: null, same: false }); i++
-    } else {
-      rows.push({ a: null, b: bTexts[j], same: false }); j++
-    }
-  }
-  while (i < aTexts.length) { rows.push({ a: aTexts[i], b: null, same: false }); i++ }
-  while (j < bTexts.length) { rows.push({ a: null, b: bTexts[j], same: false }); j++ }
-  return rows
+})
+const diffTooLarge = computed(() => {
+  const p = diffInput.value
+  return !!p && (p.a.length > DIFF_LINE_LIMIT || p.b.length > DIFF_LINE_LIMIT)
+})
+const diffPair = computed(() => {
+  if (!diffMode.value || diffTooLarge.value) return null
+  const p = diffInput.value
+  return p ? lcsDiff(p.a, p.b) : null
+})
+const visibleDiffRows = computed(() => {
+  const rows = diffPair.value
+  if (!rows) return []
+  return onlyDiff.value ? rows.filter((r) => !r.same) : rows
 })
 const diffStats = computed(() => {
   const rows = diffPair.value
@@ -179,10 +178,16 @@ export default { name: 'CompareView' }
       />
       <div style="flex: 1" />
       <n-button v-if="entries.length === 2" size="small" @click="diffMode = !diffMode">
-        {{ diffMode ? ' viewing 并排视图' : '⟷ 逐行对照' }}
+        {{ diffMode ? '⟶ 返回并排视图' : '⟷ 逐行对照' }}
+      </n-button>
+      <n-button v-if="diffMode && diffPair" size="small" secondary @click="onlyDiff = !onlyDiff">
+        {{ onlyDiff ? '显示全部行' : '仅看差异' }}
       </n-button>
       <n-tag v-if="diffStats" size="small" type="info" :bordered="false">
         相同 {{ diffStats.same }} / 差异 {{ diffStats.diff }}
+      </n-tag>
+      <n-tag v-if="diffTooLarge" size="small" type="warning" :bordered="false">
+        单列超过 {{ DIFF_LINE_LIMIT }} 行,已跳过逐行对照
       </n-tag>
       <n-tag size="small" type="warning" :bordered="false">编译在 WSL 内执行(进程级限制)</n-tag>
     </div>
@@ -197,7 +202,7 @@ export default { name: 'CompareView' }
       </div>
 
       <n-spin :show="busy" class="cols-wrap">
-        <div v-if="entries.length" class="cols">
+        <div v-if="entries.length && !diffMode" class="cols">
           <div v-for="e in entries" :key="e.opt + e.compiler" class="col panel">
             <div class="panel-title">
               <span :style="{ color: optColors[e.opt] ?? '#fff', fontWeight: 600 }">{{ e.opt }}</span>
@@ -216,13 +221,17 @@ export default { name: 'CompareView' }
             </div>
           </div>
         </div>
-        <!-- 逐行对照(合并视图) -->
-        <div v-if="entries.length === 2 && diffMode && diffPair" class="col panel" style="margin-top: 4px">
-          <div class="panel-title">逐行对照(忽略地址;绿=相同,黄=仅一侧)</div>
+        <!-- 逐行对照(替换并排视图,避免双份 DOM) -->
+        <div v-if="diffMode && diffTooLarge" class="col panel" style="margin-top: 4px; padding: 10px; color: #e0a05f">
+          汇编行数超过 {{ DIFF_LINE_LIMIT }} 行,LCS 为 O(n·m),已跳过逐行对照;请减少优化级别或用函数过滤后重试。
+        </div>
+        <div v-else-if="diffMode && diffPair" class="col panel" style="margin-top: 4px">
+          <div class="panel-title">逐行对照(归一化文本 LCS;绿=相同,黄=仅一侧)</div>
           <div class="panel-body">
             <table class="difftable">
               <tbody>
-                <tr v-for="(r, i) in diffPair" :key="i" :class="r.same ? 'same' : 'diffrow'">
+                <tr v-for="r in visibleDiffRows" :key="r.no" :class="r.same ? 'same' : 'diffrow'">
+                  <td class="d-no">{{ r.no }}</td>
                   <td class="d-mark">{{ r.same ? '=' : '≠' }}</td>
                   <td class="d-a">{{ r.a ?? '—' }}</td>
                   <td class="d-b">{{ r.b ?? '—' }}</td>
@@ -269,6 +278,8 @@ export default { name: 'CompareView' }
 .difftable tr.same td { color: #9ad1a8; }
 .difftable tr.diffrow td { color: #e6c04a; background: rgba(230, 192, 74, 0.06); }
 .difftable .d-mark { width: 24px; color: #666; text-align: center; }
+.difftable .d-no { width: 42px; color: #5f5f5f; text-align: right; padding-right: 8px; }
+.difftable .d-a, .difftable .d-b { width: 47%; white-space: pre; }
 .ph-title { font-size: 18px; color: #999; margin-bottom: 14px; }
 .ph-item { font-size: 13px; margin: 6px 0; }
 </style>

@@ -179,10 +179,10 @@ pub async fn tutor(State(st): State<AppState>, Json(req): Json<TutorReq>) -> Api
     }
 
     let mut hands_on: Vec<String> = Vec::new();
-    for (e) in ex_hits.iter().take(3).map(|(_, e)| *e) {
+    for e in ex_hits.iter().take(3).map(|(_, e)| *e) {
         hands_on.push(format!("习题「{}」({})——做一遍即验证", e.exercise.title, e.exercise.id));
     }
-    for (_, (id, title, _)) in course_hits.iter().take(2) {
+    for (_, (_, title, _)) in course_hits.iter().take(2) {
         hands_on.push(format!("课程实验:{title}(学习中心 → 打开本课实验)"));
     }
     if hands_on.is_empty() {

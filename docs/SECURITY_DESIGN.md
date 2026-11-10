@@ -19,8 +19,8 @@
 |---|---|---|
 | L1 | 死循环/超长循环 | 指令数上限 + 墙钟超时,双保险 |
 | L2 | 野指针写飞内存 | 模式 A:封闭内存映射,越界访问直接报错并停在出错指令;模式 B:进程内自身崩溃,不影响宿主 |
-| L3 | 真实系统调用(读写文件、网络) | 模式 A:syscall 桩(只有 write/exit 等教学实现);模式 B:Job Object 限制 + 平台策略(见 §4) |
-| L4 | 无限申请内存 | 模式 A:内存映射固定;模式 B:Job 内存上限 |
+| L3 | 真实系统调用(读写文件、网络) | 模式 A:syscall 桩(只有 write/exit 等教学实现);模式 B:**无系统沙箱**——仅编译侧 timeout/ulimit,按 README 要求默认关闭整条模式 B 路由 |
+| L4 | 无限申请内存 | 模式 A:内存映射固定;模式 B:**未实现 Job 内存上限**,仅编译侧 `ulimit -v` |
 
 ## 2. 模式 A(指令模拟器)——结构性隔离
 
@@ -49,38 +49,38 @@ Unicorn 模拟器的隔离来自构造,而非限制:
 
 ### Windows(主环境)
 
-- **Job Object**(win32job crate):编译产物与 gdb 等子进程全部挂入 job;`JOB_OBJECT_LIMIT_PROCESS_MEMORY`(默认 512 MB)、CPU Rate Control(可选)、`KILL_ON_JOB_CLOSE`(超时杀整棵进程树,不留孤儿)。
-- **超时:** 每个外部进程调用(nasm/clang/gdb)带 wall-clock 超时 + 输出截断(防巨量输出内存膨胀)。
-- **文件系统:** 每次会话在 `%TEMP%/assemblylab/<uuid>/` 建唯一目录,源码、产物、调试输出全在其中;会话结束/进程退出时删除;后端启动时清扫孤儿目录。被调试程序只获得该目录作为 CWD。
-- **环境变量:** 子进程环境白名单(最小 PATH、TEMP),不透传宿主全部变量。
-- **网络:** 无内置网络需求;被调试程序若自行联网,受 Windows 默认防火墙提示,平台不主动放行。此点在 UI 上如实标注为「未隔离」项。
+- **〔设计目标,当前未实现〕Job Object**(win32job crate):编译产物与 gdb 等子进程挂入 job,限制内存/CPU 并在超时时杀整棵进程树。当前实现见文末对照表:`lab-adapters::process::run_with_timeout` 提供墙钟超时 + kill + 1 MB 输出截断,**没有 Job Object / CPU 限额**。
+- **〔已实现〕超时:** 所有外部进程调用(nasm / WSL bash / ssh / scp)统一经 `process::run_with_timeout`(默认 30s,超时 kill),stdout/stderr 截断到 1 MB。gdb/MI 超时分支统一调用 `hard_kill()`。
+- **文件系统:** 每次会话在 `%TEMP%/assemblylab/<uuid>/` 建唯一目录,源码、产物、调试输出全在其中;模式 A 会话 TTL 回收,模式 B 会话 `Drop` 时删除本地目录并清理远端 gdbserver;后端启动时清扫孤儿目录。被调试程序只获得该目录作为 CWD。
+- **〔设计目标,未实现〕环境变量:** 子进程环境白名单(最小 PATH、TEMP);当前直接继承宿主环境。
+- **网络:** 无内置网络需求;模式 B 运行的是用户编译的原生二进制,**不具备网络隔离**,因此默认关闭。此点在 UI 上如实标注。
 
 ### WSL2 / Linux(可选路径,Phase 2)
 
-- 同样的临时目录与超时策略;进程限制用 `prlimit`(RLIMIT_AS/RLIMIT_CPU/RLIMIT_FSIZE/RLIMIT_NPROC);如需强化,Phase 6 评估 seccomp(用户态白名单)或 bubblewrap。默认配置下明确标注隔离等级为「进程级限制」。
+- 同样的临时目录与超时策略;**〔设计目标,未实现〕**进程限制用 `prlimit`(RLIMIT_AS/RLIMIT_CPU/RLIMIT_FSIZE/RLIMIT_NPROC),未来可评估 seccomp/bubblewrap。当前 WSL 侧仅编译命令内 `timeout` + `ulimit`,运行侧(gdb/被调试程序)无资源限制,隔离等级如实标注为「进程级限制,非强沙箱」。
 
 ### 不可能时的降级(README 硬性要求)
 
-设置页的「执行模式」开关:
+**当前没有设置页开关**,改用后端启动时的环境变量显式开启:
 
-| 模式 | Phase 1 | Phase 2+ |
+| 模式 | 开关 | 默认 |
 |---|---|---|
-| A 模拟器 | ✅ 默认启用 | ✅ |
-| B Windows 原生调试 | ❌ 不存在 | ✅ 启用,标注「进程级隔离,非强沙箱」 |
-| B WSL 调试 | ❌ | ⚙️ 检测到 WSL+工具链才出现,同样标注 |
+| A 模拟器 | 无需开关 | ✅ 启用 |
+| B x86-64 WSL 调试 | `ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1` | ❌ 关闭(返回 403) |
+| B ARM64 远程真机 | 上面开关 + `ASSEMBLYLAB_ENABLE_ARM64_REMOTE=1` + 显式配置主机/用户 | ❌ 关闭 |
 
 未达标(如缺工具)时按钮禁用并显示原因,而不是允许执行后再失败。
 
 ## 4. 外部工具进程安全(汇编/编译/调试器)
 
 - **源码经临时文件传入,绝不拼接进命令行**(防参数注入);文件名由平台生成,用户输入不参与路径构造。
-- 所有工具调用统一走 `ToolAdapter` 的超时包装(默认 30 s 编译 / 5 s gdb 命令),输出上限 1 MB,超限截断。
-- gdb/被调试进程同挂 Job Object;gdb 以 `-batch` 或 MI 模式受控驱动,禁用其 shell 命令(gdb 内 `!`/`shell`)——通过 MI 白名单命令集实现,不透传用户原始命令。
+- 所有工具调用统一走 `lab_adapters::process::run_with_timeout`(默认 30 s,超时 kill 子进程),stdout/stderr 上限 1 MB 截断。
+- gdb 以 MI 模式受控驱动:`GdbSession::send` 拒绝一切控制字符(防换行注入第二条命令),`console_capture` 仅允许只读 `p/ptype/info/x` 且禁引号/分号/反引号/`$`,观察点表达式走严格字符白名单。socat 只绑 `127.0.0.1` 且端口随机化;**〔设计目标,未实现〕** Job Object 进程树限额与 MI 端口应用层认证。
 - 下载的预编译库(unicorn.dll)只从官方 GitHub release 获取,校验来源 URL,存放于 `spikes/`(验证用)或产品分发时的固定位置;不执行任何下载内容的代码以外的隐式行为。
 
 ## 5. 数据与配置安全
 
-- AI 助教的 api_key 只存本地 SQLite(settings 表),永不写入仓库与日志;AI 请求只发送与当前教学相关的结构化上下文(StepReport、ISA 注释、用户答案),不发送课程库全文或文件系统内容。
+- AI 助教(本地检索式)不联网;可选外部 LLM 的 `ASSEMBLYLAB_AI_KEY` **只存后端进程环境变量**,不入库、不写日志、不返回前端。LLM 请求只发送当前问题与命中的 ISA 注释,不发送课程库全文或文件系统内容;端点强制 https(本机 http 仅调试)。
 - 日志(tracing)不记录用户源码全文,只记录会话元信息与错误摘要(可配置)。
 - 后端默认绑定 `127.0.0.1`;如需局域网访问必须用户显式改配置并弹出警示(README 定位是本地工具)。
 
@@ -107,18 +107,23 @@ Unicorn 模拟器的隔离来自构造,而非限制:
 
 ## 附:实现状态注记(P7 收官补充,如实对照)
 
-上方为设计目标;**当前实现状态**如下(审查后修正):
+上方为 Phase 0 设计目标;**当前实现状态**如下(2026-11-10 第二轮审查修复后复核):
 
 | 设计承诺 | 实现状态 |
 |---|---|
 | 模式 A 强隔离(Unicorn 内存映射封闭) | ✅ 已实现 |
-| 模式 B 隔离(Job Object / seccomp) | ⚠ **未实现**——实际为进程级限制(WSL timeout/ulimit + socat 绑 127.0.0.1)。按 README「做不到隔离要默认禁用」原则,**模式 B 路由默认关闭**,以环境变量 `ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1` 明确开启 |
-| 超时保护 | ✅ CMD_TIMEOUT 超时 + **hard_kill 终止 socat/gdb 进程树**(失控进程不再残留) |
-| MI 命令白名单 | ✅ console 通道仅允许只读 p/ptype/info/x(禁 shell/分号/反引号/$);编译器/优化等级/进度状态均精确白名单 |
-| 输出截断 | ✅ syscall 桩 4096 字节/条、judge 输出包含断言;1MB 上限(ulimit)在编译侧 |
-| 路径遍历 | ✅ ISA id 白名单(小写字母数字连字符);错误信息不再回显绝对路径 |
-| 会话资源 | ✅ 会话数上限 32;进度状态白名单 |
+| 模式 B 系统沙箱(Job Object / seccomp / 网络隔离) | ❌ **未实现**,实际为进程级限制。按 README「做不到隔离要默认禁用」原则,模式 B 路由默认关闭并返回 403;`ASSEMBLYLAB_ENABLE_UNSAFE_DEBUG=1` 才开启,ARM64 远程还需 `ASSEMBLYLAB_ENABLE_ARM64_REMOTE=1` 与显式主机配置 |
+| 外部进程超时与输出截断 | ✅ `process::run_with_timeout`(默认 30s,超时 kill 子进程)+ stdout/stderr 1 MB 截断;gdb/MI 所有超时分支统一 `hard_kill()` |
+| MI 命令注入防护 | ✅ `send()` 拒绝所有控制字符(防换行拆成多条命令);观察点表达式严格白名单;console 通道只读白名单;socat 绑 `127.0.0.1` + 随机端口。**未实现** MI 端口应用层认证 |
+| 路径遍历 | ✅ `security::guard` 对所有路径段做 `[A-Za-z0-9_-]` 白名单;ISA id 另有白名单;`ApiError` 对 Io/Emulator 错误统一脱敏,详情只进服务端日志 |
+| 会话资源 | ✅ 模式 A 上限 32、模式 B 上限 8,30 分钟空闲 TTL 回收;模式 B `Drop` 删除本地临时目录、kill ssh 隧道并按会话 pid 清理远端 gdbserver |
+| 鉴权 / 限流 / 来源校验 | ✅ 可选 `ASSEMBLYLAB_API_TOKEN`、全局与 LLM 独立每分钟限流、Origin 仅允许本机 |
+| 判题答案保密 | ✅ 提交响应不含 `expected` 与 `answer_md`;参考解析需主动 `GET /api/exercises/{id}/answer`;离线包默认不含答案(`?include_answers=true` 才导出) |
+| ARM64 远程执行面 | ✅ 代码中无内置主机/口令;强制 aarch64 交叉编译器;gdbserver 只绑远端回环并经 `ssh -L` 隧道;不再全局 `pkill`,按会话 pid 文件精确清理 |
+| 外部 LLM | ✅ 强制 https(本机 http 仅调试)、密钥只在服务端环境变量、system/user 消息分离、响应 1 MB 上限、60s 超时、独立限流 |
 
-**威胁模型如实声明**:模式 B 开启后为"本地个人工具防误操作"级别,非强沙箱——
-运行的是用户编译的原生二进制,勿在此运行不可信代码。不可信代码的隔离属未来工作
+**威胁模型如实声明**:模式 B 开启后为「本地个人工具防误操作」级别,非强沙箱——
+运行的是用户编译的原生二进制,WSL2 可访问 `/mnt/c`,勿在此运行不可信代码。
+MI 端口虽绑回环且随机,但**没有应用层认证**:同一台机器上若有不可信进程,仍可能连接该端口,
+因此不应把本服务部署在多租户/不可信主机上。不可信代码的强隔离属未来工作
 (方案候选:Windows Job Object / WSL 容器化 / qemu-user 隔离)。

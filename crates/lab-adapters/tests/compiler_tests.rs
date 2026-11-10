@@ -73,6 +73,10 @@ fn compile_with_source_mapping() {
 
 #[test]
 fn compile_error_line_mapping() {
+    if !wsl_available() {
+        eprintln!("skip: WSL 不可用(沙箱/CI)——WSL 依赖测试跳过");
+        return;
+    }
     let result = compile(&CompileRequest {
         source: "int main() { return oops; }\n".into(),
         opt: "O0".into(),

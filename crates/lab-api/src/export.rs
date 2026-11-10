@@ -4,16 +4,28 @@
 //! 实验源码以内嵌 <pre> 呈现(离线包定位 = 阅读与复习;动手实验回平台)。
 //! README 原则:内容是结构化数据的只读投影,不产生第二份真相。
 
-use crate::api::{ApiError, ApiResult, AppState};
-use axum::extract::{Path, State};
-use axum::response::IntoResponse;
+use crate::api::{ApiError, AppState};
+use axum::extract::{Path, Query, State};
 use lab_judge::load_exercises;
+use serde::Deserialize;
+
+/// 离线包默认**不含**参考解析(否则离线文件本身就是答案表)。
+/// 需要复习答案时显式带 ?include_answers=true 导出。
+#[derive(Debug, Default, Deserialize)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub include_answers: bool,
+}
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn render_course_html(v: &toml::Value, exercises: &[lab_judge::ExercisePackage]) -> String {
+fn render_course_html(
+    v: &toml::Value,
+    exercises: &[lab_judge::ExercisePackage],
+    include_answers: bool,
+) -> String {
     // toml Index 对缺键 panic:统一 .get()
     let empty = toml::Value::Table(Default::default());
     let get = |v: &toml::Value, path: &[&str]| -> String {
@@ -54,12 +66,23 @@ fn render_course_html(v: &toml::Value, exercises: &[lab_judge::ExercisePackage])
         if e.exercise.lesson != lesson_id {
             continue;
         }
-        ex_html.push_str(&format!(
-            "<section class='ex'><h4>习题:{}({})</h4><details><summary>参考解析</summary><pre class='c'>{}</pre></details></section>",
+        let head = format!(
+            "<section class='ex'><h4>习题:{}({})</h4>",
             esc(&e.exercise.title),
-            esc(&e.exercise.kind),
-            esc(&e.exercise.answer_md)
-        ));
+            esc(&e.exercise.kind)
+        );
+        if include_answers && !e.exercise.answer_md.is_empty() {
+            ex_html.push_str(&format!(
+                "{}<details><summary>参考解析</summary><pre class='c'>{}</pre></details></section>",
+                head,
+                esc(&e.exercise.answer_md)
+            ));
+        } else {
+            ex_html.push_str(&format!(
+                "{}<p class='meta'>参考解析请在平台内主动查看(离线包默认不含答案)。</p></section>",
+                head
+            ));
+        }
     }
 
     format!(
@@ -99,6 +122,7 @@ footer{{color:#555;font-size:12px;margin-top:30px}}
 pub async fn export_course(
     State(st): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<ExportQuery>,
 ) -> Result<axum::response::Response, ApiError> {
     let path = st.data_dir().join("courses").join(format!("{id}.toml"));
     let text = std::fs::read_to_string(&path)
@@ -106,9 +130,9 @@ pub async fn export_course(
     let v: toml::Value = toml::from_str(&text)
         .map_err(|e| ApiError(lab_core::LabError::BadRequest(format!("解析失败: {e}"))))?;
     let exercises = load_exercises(st.data_dir());
-    let html = render_course_html(&v, &exercises);
+    let html = render_course_html(&v, &exercises, q.include_answers);
     use axum::http::header;
-    let mut resp = axum::response::Response::builder()
+    let resp = axum::response::Response::builder()
         .status(200)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{id}.html\""))
@@ -118,7 +142,10 @@ pub async fn export_course(
 }
 
 /// GET /api/export/all — 全部课程合集(单 HTML 目录 + 内嵌各课正文)
-pub async fn export_all(State(st): State<AppState>) -> Result<axum::response::Response, ApiError> {
+pub async fn export_all(
+    State(st): State<AppState>,
+    Query(q): Query<ExportQuery>,
+) -> Result<axum::response::Response, ApiError> {
     let dir = st.data_dir().join("courses");
     let exercises = load_exercises(st.data_dir());
     let mut toc = String::new();
@@ -131,9 +158,6 @@ pub async fn export_all(State(st): State<AppState>) -> Result<axum::response::Re
         .collect();
     paths.sort();
     for p in &paths {
-        if let (Ok(text), Ok(v)) = (std::fs::read_to_string(p), toml::from_str::<toml::Value>(p.to_str().unwrap_or("")).map(|_| ())) {
-            let _ = text;
-        }
         if let Ok(text) = std::fs::read_to_string(p) {
             if let Ok(v) = toml::from_str::<toml::Value>(&text) {
                 let empty = toml::Value::Table(Default::default());
@@ -151,7 +175,7 @@ pub async fn export_all(State(st): State<AppState>) -> Result<axum::response::Re
                 let title = get(&v, &["lesson", "title"]);
                 let stage = v.get("lesson").and_then(|l| l.get("stage")).and_then(|x| x.as_integer()).unwrap_or(0);
                 toc.push_str(&format!("<li><a href=\"#c{}\">[阶段 {}] {}</a></li>", esc(&id), stage, esc(&title)));
-                bodies.push_str(&format!("<div id=\"c{}\">{}</div><hr/>", esc(&id), render_course_html(&v, &exercises)));
+                bodies.push_str(&format!("<div id=\"c{}\">{}</div><hr/>", esc(&id), render_course_html(&v, &exercises, q.include_answers)));
             }
         }
     }

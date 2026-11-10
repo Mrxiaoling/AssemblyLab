@@ -6,12 +6,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use lab_adapters::nasm;
-use lab_core::{isa::MemoryMap, IsaDefinition, LabError};
+use lab_core::{isa::MemoryMap, LabError};
 use lab_engine::{hx, Session, U64In};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::debug::AsmLineDto;
 
@@ -20,6 +21,8 @@ pub type SessionRef = Arc<Mutex<Session>>;
 #[derive(Clone)]
 pub struct AppState {
     sessions: Arc<Mutex<HashMap<u64, SessionRef>>>,
+    /// 会话最后访问时间(空闲 TTL 回收)
+    last_used: Arc<Mutex<HashMap<u64, Instant>>>,
     next_id: Arc<AtomicU64>,
     data_dir: Arc<std::path::PathBuf>,
     storage: Arc<std::sync::OnceLock<Result<lab_storage::Storage, String>>>,
@@ -35,6 +38,7 @@ impl AppState {
             });
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            last_used: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
             data_dir: Arc::new(data_dir),
             storage: Arc::new(std::sync::OnceLock::new()),
@@ -76,15 +80,44 @@ impl AppState {
     fn insert(&self, session: Session) -> u64 {
         let id = session.id;
         self.sessions.lock().unwrap().insert(id, Arc::new(Mutex::new(session)));
+        self.last_used.lock().unwrap().insert(id, Instant::now());
         id
     }
 
     fn get(&self, id: u64) -> Option<SessionRef> {
-        self.sessions.lock().unwrap().get(&id).cloned()
+        let s = self.sessions.lock().unwrap().get(&id).cloned();
+        if s.is_some() {
+            self.last_used.lock().unwrap().insert(id, Instant::now());
+        }
+        s
     }
 
     fn remove(&self, id: u64) -> Option<SessionRef> {
+        self.last_used.lock().unwrap().remove(&id);
         self.sessions.lock().unwrap().remove(&id)
+    }
+
+    /// 回收空闲超时的会话(后台定时器调用)。
+    pub fn sweep_expired(&self, ttl: Duration) {
+        let now = Instant::now();
+        let mut expired = Vec::new();
+        if let Ok(mut used) = self.last_used.lock() {
+            used.retain(|id, t| {
+                let keep = now.duration_since(*t) < ttl;
+                if !keep {
+                    expired.push(*id);
+                }
+                keep
+            });
+        }
+        if !expired.is_empty() {
+            let n = expired.len();
+            let mut sessions = self.sessions.lock().unwrap();
+            for id in expired {
+                sessions.remove(&id);
+            }
+            tracing::info!("已回收 {n} 个空闲会话");
+        }
     }
 }
 
@@ -121,9 +154,20 @@ impl IntoResponse for ApiError {
             LabError::Assemble { line, .. } => Some(*line),
             _ => None,
         };
-        let body = ErrorBody {
-            error: ErrorDetail { kind: self.0.kind().to_string(), message: self.0.to_string(), line },
+        // 详细错误(常含 Windows/WSL 绝对路径、内部命令)只写服务端日志;
+        // 客户端只拿到稳定文案,避免被用来测绘部署结构。
+        tracing::error!("API 处理失败: {}", self.0);
+        let message = match &self.0 {
+            LabError::BadRequest(s) => s.clone(),
+            LabError::Assemble { message, .. } => message.clone(),
+            LabError::IsaNotFound(_) => "ISA 不存在".to_string(),
+            LabError::SessionNotFound => "会话不存在".to_string(),
+            LabError::ToolUnavailable(s) => s.clone(),
+            LabError::UnmappedAccess { .. } | LabError::InstructionFault(_) => self.0.to_string(),
+            LabError::Io(_) => "内部 I/O 错误(详情见服务端日志)".to_string(),
+            LabError::Emulator(_) => "实验引擎内部错误(详情见服务端日志)".to_string(),
         };
+        let body = ErrorBody { error: ErrorDetail { kind: self.0.kind().to_string(), message, line } };
         (status, Json(body)).into_response()
     }
 }

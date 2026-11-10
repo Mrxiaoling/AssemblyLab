@@ -13,6 +13,12 @@ related_experiment = "stage10-lesson01"
 
 hints.level1 = "add x2, x0, x1, lsl #1 是 x0 + (x1<<1);adds 才置标志(0x7D 不产生进位/溢出)。"
 hints.level2 = "21 + (2<<1) = 25 → x2=0x19;25 + 100 = 125 = 0x7D;无符号与有符号都不越界 → NZCV 全 0。"
+answer_md = """
+`add x2, x0, x1, lsl #1` 计算 21 + (2<<1) = **25 = 0x19** 到 X2。
+随后 `adds x2, x2, #100` 得 **125 = 0x7D**。AArch64 只有带 `s` 后缀的算术指令才更新 NZCV:
+125 是正数、非 0、没有无符号进位(C=0)、也没有有符号溢出(V=0),所以 **NZCV 原始值 = 0**(N=0,Z=0,C=0,V=0)。
+对比 x86:ADD 总会写 RFLAGS,而 AArch64 默认 ADD 不改标志——这是两架构最容易混淆的差异之一。
+"""
 
 [predict]
 exec = "step:5"

@@ -12,6 +12,12 @@ related_experiment = "stage03-lesson02"
 
 hints.level1 = "每次循环加的是 [rbx+rcx*4]:rcx 是下标,4 是 int 大小。逐圈累加即可。"
 hints.level2 = "3+7+11+5+9 = 35 = 0x23;循环结束时 rcx == 5(jge 刚失败)。"
+answer_md = """
+`[rbx+rcx*4]` 中 rcx 是下标、scale=4 是 `int` 的宽度。五轮累加 3+7+11+5+9 = 35 = **0x23**,
+结果留在 EAX(写 32 位寄存器会把 RAX 高位清零,所以 RAX=0x23);
+循环退出时 `cmp ecx,5` 使 `jge` 刚失败,此时 **RCX=5**。
+注意 `jge` 判断的是"下标已达到 5",不是"已加完 5 个元素"之外的其它条件。
+"""
 
 [predict]
 exec = "step:30"

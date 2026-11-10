@@ -12,6 +12,13 @@ related_experiment = "stage09-lesson02"
 
 hints.level1 = "失败(cmpxchg):RAX 被填成内存当前值(这就是重试的数据来源);ZF=0。"
 hints.level2 = "内存=1(已锁)≠ eax=0 → 失败;RAX=1,ZF=0;内存不变仍是 1。"
+answer_md = """
+`lock cmpxchg dword [lock_var], edx` 先比较 EAX(0) 与内存当前值(1):不相等 → **比较失败**。
+CMPXCHG 失败时会把内存当前值载入 EAX(供下一次重试),ZF=0,内存**保持不变**;
+所以 `mov ebx, eax` 得 **RBX=1**,`mov ecx, [lock_var]` 读回仍是 **RCX=1**。
+`lock` 前缀保证整个"读-比较-写"对其它核原子化,这正是自旋锁/CAS 循环的底层;
+本题的 EDX=2 只在成功时才会写入,失败路径完全不修改内存。
+"""
 
 [predict]
 exec = "step:5"

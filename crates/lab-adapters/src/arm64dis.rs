@@ -4,7 +4,7 @@
 
 use lab_core::LabError;
 use yaxpeax_arch::Decoder;
-use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction};
+use yaxpeax_arm::armv8::a64::InstDecoder;
 
 pub use crate::iced::DisasmLine;
 

@@ -12,6 +12,12 @@ related_experiment = "stage04-lesson02"
 
 hints.level1 = "fact 把返回值留在 eax;程序在退出前先把 eax 转存进 ebx(否则会被 exit 覆盖)。"
 hints.level2 = "5! = 120 = 0x78。"
+answer_md = """
+`fact(5) = 5×4×3×2×1 = 120 = 0x78`,返回值按约定放在 EAX;程序用 `mov ebx, eax` 转存 → **RBX=0x78**。
+之后 `mov rax,60` / `mov edi,0` 为 exit 系统调用做准备,因此退出时 **RDI=0**(退出码),
+而不是递归时的参数 5。递归里 `push rdi` / `pop rdi` 保证每层能恢复自己的 n 再 `imul eax, edi`。
+若不做 ebx 转存,`mov rax,60` 会直接覆盖返回值,这也是本题想让你观察到的寄存器复用问题。
+"""
 
 [predict]
 exec = "run"

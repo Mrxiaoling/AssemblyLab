@@ -5,7 +5,7 @@
 
 use lab_core::LabError;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -103,7 +103,6 @@ fn parse_value(b: &[char], pos: &mut usize) -> MiValue {
             *pos += 1;
             skip_ws(b, pos);
             // {..} 可能是 tuple 或 list(如 args=[{..},{..}]);以是否有 `name=` 判断
-            let save = *pos;
             let v = parse_tuple_body(b, pos);
             if *pos < b.len() && b[*pos] == '}' {
                 *pos += 1;
@@ -203,7 +202,7 @@ enum RawLine {
     Notify,
     /// 流输出(~"…"/@"…"/&"…"),携带原始行(console_capture 用)
     Console,
-    Other(String),
+    Other,
 }
 
 fn classify(line: &str) -> RawLine {
@@ -249,7 +248,7 @@ fn classify(line: &str) -> RawLine {
             }
         }
     }
-    RawLine::Other(line.to_string())
+    RawLine::Other
 }
 
 pub struct GdbSession {
@@ -271,12 +270,18 @@ pub struct GdbStop {
     pub frame_line: Option<u32>,
 }
 
-// 端口基址按进程 ID 派生:后端重启后不再撞上 WSL 里残留的僵尸 socat
-static GDB_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-
+// 端口随机化:不再由 pid + 自增序列推算。socat 只绑 127.0.0.1,
+// 配合不可预测的端口降低同机其它进程误连/劫持 MI 会话的可能。
 fn next_gdb_port() -> u16 {
-    let base = 20000u16 + (std::process::id() % 15000) as u16;
-    base + GDB_PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 1000
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let n = NONCE.fetch_add(1, Ordering::SeqCst);
+    let mixed = nanos ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((std::process::id() as u64) << 17);
+    20_000 + (mixed % 35_000) as u16
 }
 
 impl GdbSession {
@@ -305,7 +310,7 @@ impl GdbSession {
             port = port,
             gdb_bin = gdb_bin
         );
-        let mut socat = Command::new("wsl.exe")
+        let socat = Command::new("wsl.exe")
             .args(["-d", WSL_DISTRO, "-e", "bash", "-c", &script])
             .spawn()
             .map_err(|e| LabError::ToolUnavailable(format!("socat 启动失败: {e}")))?;
@@ -327,14 +332,12 @@ impl GdbSession {
 
         let write_half = stream.try_clone().map_err(|e| LabError::Emulator(e.to_string()))?;
         let (tx, rx) = mpsc::channel();
-        let t0 = std::time::Instant::now();
         std::thread::spawn(move || {
             let reader = BufReader::new(stream);
-            let t0 = std::time::Instant::now();
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        eprintln!("[TCP+{:?}] {}", t0.elapsed(), &l[..l.len().min(70)]);
+                        // MI 原始输出可能含源码/表达式,不再打到 stderr
                         if tx.send(l).is_err() {
                             break;
                         }
@@ -364,7 +367,8 @@ impl GdbSession {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             if std::time::Instant::now() > deadline {
-                return Err(LabError::ToolUnavailable("gdb 启动超时".into()));
+                self.hard_kill();
+                return Err(LabError::ToolUnavailable("gdb 启动超时(已终止调试进程)".into()));
             }
             match self.rx.recv_timeout(Duration::from_secs(5)) {
                 Ok(line) => {
@@ -387,6 +391,13 @@ impl GdbSession {
     }
 
     fn send(&mut self, cmd: &str) -> Result<(), LabError> {
+        // MI 是按行解析的:任何控制字符(尤其 \n、\r)都能把一条命令拆成多条,
+        // 用户可控的观察点表达式等必须在此统一拦截。
+        if cmd.chars().any(|c| c.is_control()) {
+            return Err(LabError::BadRequest(
+                "MI 命令含控制字符,已拒绝(防止命令注入)".into(),
+            ));
+        }
         self.token += 1;
         let mut guard = self.stream_tx.lock().unwrap();
         let w = guard.as_mut().ok_or_else(|| LabError::Emulator("gdb 已退出".into()))?;
@@ -401,7 +412,8 @@ impl GdbSession {
         let deadline = std::time::Instant::now() + CMD_TIMEOUT;
         loop {
             if std::time::Instant::now() > deadline {
-                return Err(LabError::Emulator(format!("gdb 命令超时: {cmd}")));
+                self.hard_kill();
+                return Err(LabError::Emulator("gdb 命令超时(已终止调试进程)".into()));
             }
             match self.rx.recv_timeout(CMD_TIMEOUT) {
                 Ok(line) => match classify(&line) {
@@ -434,7 +446,8 @@ impl GdbSession {
         let deadline = std::time::Instant::now() + CMD_TIMEOUT;
         loop {
             if std::time::Instant::now() > deadline {
-                return Err(LabError::Emulator("程序执行超时".into()));
+                self.hard_kill();
+                return Err(LabError::Emulator("程序执行超时(已终止调试进程)".into()));
             }
             match self.rx.recv_timeout(CMD_TIMEOUT) {
                 Ok(line) => match classify(&line) {
@@ -450,7 +463,10 @@ impl GdbSession {
                     RawLine::Stop(results) => return Ok(to_stop(&results)),
                     _ => {}
                 },
-                Err(RecvTimeoutError::Timeout) => return Err(LabError::Emulator("等待停止事件超时".into())),
+                Err(RecvTimeoutError::Timeout) => {
+                    self.hard_kill();
+                    return Err(LabError::Emulator("等待停止事件超时(已终止调试进程)".into()));
+                }
                 Err(_) => return Err(LabError::Emulator("gdb 进程退出".into())),
             }
         }
@@ -495,12 +511,20 @@ impl GdbSession {
     /// 观察点(写观察):表达式被写入时停下。
     /// 需要 frame 上下文——未启动时会报错,由调用方决定先 run。
     pub fn insert_watchpoint(&mut self, expr: &str) -> Result<u64, LabError> {
-        // 表达式含空格/括号时整体加引号,防 MI 参数拆分
-        let quoted = if expr.contains([' ', '(', ')']) {
-            format!("\"{expr}\"")
-        } else {
-            expr.to_string()
-        };
+        // 严格表达式白名单:只允许标识符、寄存器前缀与简单算术/解引用,
+        // 拒绝引号、换行、分号、反引号、$() 等可改变 MI 命令结构的字符。
+        const ALLOWED: &str = " ()[]+-*._:$&";
+        if expr.is_empty()
+            || expr.len() > 200
+            || !expr
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ALLOWED.contains(c))
+        {
+            return Err(LabError::BadRequest(
+                "观察点表达式含非法字符(仅允许标识符、寄存器与简单算术)".into(),
+            ));
+        }
+        let quoted = format!("\"{}\"", expr.replace('\\', "\\\\").replace('"', "\\\""));
         let v = self.exec_raw(&format!("-break-watch {quoted}"))?;
         let num = v
             .get("wpt")
@@ -663,15 +687,19 @@ impl GdbSession {
                 "console 命令不在白名单(仅允许只读 p/ptype/info/x): {cmd}"
             )));
         }
+        if cmd.chars().any(|c| c.is_control()) {
+            return Err(LabError::BadRequest("console 命令含控制字符(已拒绝)".into()));
+        }
         if cmd.contains('"') || cmd.contains(';') || cmd.contains('`') || cmd.contains('$') {
-            return Err(LabError::BadRequest(format!("console 命令含非法字符: {cmd}")));
+            return Err(LabError::BadRequest("console 命令含非法字符(已拒绝)".into()));
         }
         self.send(&format!("-interpreter-exec console \"{cmd}\""))?;
         let deadline = std::time::Instant::now() + CMD_TIMEOUT;
         let mut out = String::new();
         loop {
             if std::time::Instant::now() > deadline {
-                return Err(LabError::Emulator(format!("console 命令超时: {cmd}")));
+                self.hard_kill();
+                return Err(LabError::Emulator("console 命令超时(已终止调试进程)".into()));
             }
             match self.rx.recv_timeout(CMD_TIMEOUT) {
                 Ok(line) => {
@@ -695,7 +723,8 @@ impl GdbSession {
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(LabError::Emulator(format!("gdb 响应超时: {cmd}")))
+                    self.hard_kill();
+                    return Err(LabError::Emulator("gdb 响应超时(已终止调试进程)".into()))
                 }
                 Err(_) => return Err(LabError::Emulator("gdb 进程退出".into())),
             }
@@ -727,7 +756,7 @@ impl GdbSession {
         let mut out = Vec::new();
         let mut depth = 0i32;
         let mut cur = String::new();
-        let mut flush = |chunk: &str, out: &mut Vec<(String, String)>| {
+        let flush = |chunk: &str, out: &mut Vec<(String, String)>| {
             if let Some(eq) = chunk.find(" = ") {
                 let name = chunk[..eq].trim().to_string();
                 let value = chunk[eq + 3..].trim().to_string();

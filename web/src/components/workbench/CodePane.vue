@@ -50,6 +50,17 @@ watch(
   },
 )
 
+// 点击反汇编行 → 定位到对应源码行(存在调试行号映射时)
+watch(
+  () => store.focusSourceLine,
+  (line) => {
+    if (!editor || !line) return
+    editor.revealLineInCenter(line)
+    editor.setPosition({ lineNumber: line, column: 1 })
+    editor.focus()
+  },
+)
+
 // 当前执行位置:通过 line_map 找 RIP 对应源码行
 watch(
   () => store.rip,

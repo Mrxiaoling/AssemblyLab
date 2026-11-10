@@ -12,6 +12,12 @@ related_experiment = "stage03-lesson02"
 
 hints.level1 = "缺的是带下标寻址的加法:数组元素是 int,scale 是多少?"
 hints.level2 = "`add eax, [rbx+rcx*4]`(寄存器大小写均可)。"
+answer_md = """
+空格填 `add eax, [rbx+rcx*4]`。rbx 是数组首地址、rcx 是当前下标,int 占 4 字节,
+所以有效地址是 `rbx + rcx*4`;scale 只能是 1/2/4/8,不能写成 `rcx*sizeof(int)`。
+五轮后 EAX=0x23(35),`mov [0x400100], rax` 把结果写入内存,判题器校验该 qword 与退出码 0。
+常见错误是写成 `add eax, [rbx+rcx]`(按字节步进)或用 `rax` 做 64 位加法却忽略高位。
+"""
 
 [fill_blank]
 hole_hint = "一条指令:eax += arr[i](rbx=数组首地址,rcx=i,元素为 int)"

@@ -1359,7 +1359,9 @@ Phase 0 交付：
 
 如果只是给出一段文字解释和一张静态示意图，不算完成。
 
-# 当前任务
+# 附:Phase 0 初始指令(存档,勿按此执行)
+
+以下为项目立项时的 Phase 0 指令,保留作为需求溯源。当前实现状态见文末「实现状态注记」:**Phase 0-7 已交付**。
 
 现在先执行 Phase 0：需求调研和架构设计。
 
@@ -1392,4 +1394,5 @@ Phase 0 交付：
 
 - `vendor/unicorn.dll`:Unicorn Engine 2.1.4,**GPL-2.0 许可证**(来源:PyPI 官方 wheel,验证见 spikes/unicorn_step_diff/RESULT.md)。仅限本地个人使用不触发分发义务;**若需分发本平台二进制,须遵守 GPL-2.0 或切换自研解释器**(接口已隔离,见 EXPERIMENT_ENGINE.md)。其余代码与数据文件不受此约束。
 
-完成后暂停，等待我确认，不要擅自进入 Phase 1。
+上方是 Phase 0 的原始指令存档(当时要求「完成后暂停等待确认」)。该流程早已完成并经确认推进到 Phase 7;
+本文件末尾的「实现状态注记」与 `docs/PHASE1-REPORT.md` ~ `docs/PHASE7-REPORT.md` 才是当前事实来源。

@@ -68,6 +68,8 @@ interface SessionStoreState {
   traceDropped: number
   busy: boolean
   error: string | null
+  /** 点击反汇编行时关联的源码行(CodePane 会滚动定位) */
+  focusSourceLine: number | null
 }
 
 export const useSessionStore = defineStore('session', {
@@ -87,6 +89,7 @@ export const useSessionStore = defineStore('session', {
     traceDropped: 0,
     busy: false,
     error: null,
+    focusSourceLine: null,
   }),
 
   getters: {

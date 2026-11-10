@@ -4,8 +4,8 @@
 //! 符号来自 `nm`,行号映射来自 `objdump -d -l`。错误行号映射回用户源码。
 //! 安全与 nasm 适配一致:临时目录唯一 + timeout 包裹 + 输出截断。
 
-use lab_core::{LabError, LineMapping, ProgramImage};
-use std::path::PathBuf;
+use crate::process;
+use lab_core::{LabError, ProgramImage};
 use std::process::Command;
 
 const WSL_DISTRO: &str = "Ubuntu-22.04";
@@ -43,14 +43,16 @@ pub fn assemble(source: &str, base: u64) -> Result<ProgramImage, LabError> {
 
     let wsl_dir = crate::compiler::to_wsl_path(&dir)?;
     let run = |script: &str| -> Result<(bool, String, String), LabError> {
-        let out = Command::new("wsl.exe")
-            .args(["-d", WSL_DISTRO, "-e", "bash", "-c", script])
-            .output()
-            .map_err(|e| LabError::ToolUnavailable(format!("无法启动 wsl: {e}")))?;
+        let mut cmd = Command::new("wsl.exe");
+        cmd.args(["-d", WSL_DISTRO, "-e", "bash", "-c", script]);
+        let out = process::run_with_timeout(&mut cmd, process::DEFAULT_TIMEOUT).map_err(|e| {
+            tracing::warn!("WSL 汇编工具调用失败: {e}");
+            LabError::ToolUnavailable("WSL 汇编工具不可用或超时".into())
+        })?;
         Ok((
             out.status.code().unwrap_or(-1) == 0,
-            String::from_utf8_lossy(&out.stdout).to_string(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
+            process::stdout_text(&out),
+            process::stderr_text(&out),
         ))
     };
 

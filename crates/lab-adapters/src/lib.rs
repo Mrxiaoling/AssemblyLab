@@ -13,6 +13,7 @@ pub mod gdb;
 pub mod gnu_as;
 pub mod iced;
 pub mod nasm;
+pub mod process;
 pub mod unicorn;
 
 use lab_core::LabError;

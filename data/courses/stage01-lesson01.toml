@@ -32,6 +32,23 @@ result: dq 0
 '''
 watch = ["RAX", "RBX", "RIP", "RFLAGS"]
 
+# 正文中的关键数值由 content_tests 用真实模拟引擎逐步校验(第 N 步的寄存器快照)。
+# 改动实验源码后必须同步这里,否则测试会失败,避免教学正文静默过期。
+[[lesson.experiment.golden]]
+step = 1
+reg = "RAX"
+value = "0xa"
+
+[[lesson.experiment.golden]]
+step = 2
+reg = "RBX"
+value = "0x14"
+
+[[lesson.experiment.golden]]
+step = 3
+reg = "RAX"
+value = "0x1e"
+
 [[steps]]
 kind = "problem"
 title = "本节要解决的问题"
@@ -104,9 +121,9 @@ content = """
 kind = "hands-on"
 title = "动手实验:先预测,再验证"
 content = """
-在工作台里**修改源码**:把 `mov ebx, 20` 改成 `mov ebx, 50`,重新编译源码,
-先在心里预测 RAX 最终是多少,再单步验证。(答案:0x2a,因为 10+50=60=0x3c?不——
-别急,自己跑一遍!注意 `sub eax,5` 不在本程序里……看清楚代码再预测。)
+在工作台里**修改源码**:把 `mov ebx, 20` 改成 `mov ebx, 50`,重新编译,
+先预测新的结果再单步验证。提示:`10 + 50 = 60 = 0x3c`,而本程序没有 `sub`,
+别把习题里的减法带进来;真正的结果以重新执行后的寄存器面板为准。
 """
 
 [[steps]]
